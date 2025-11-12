@@ -3,8 +3,7 @@ QThreadPool workers for GUI processing.
 
 Implements page-level workers that integrate the full OCR pipeline:
 - PDF loading with preprocessing
-- DocAI/routing with heuristics
-- Ensemble processing
+- DocAI processing (OCR + Form Parser + Layout Parser)
 - Postprocessing and normalization
 - Searchable PDF generation
 - Cache integration
@@ -13,17 +12,20 @@ Implements page-level workers that integrate the full OCR pipeline:
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+import io
 
 from PyQt5.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QPixmap, QImage
 from PIL import Image
 
 from cache.store import CacheManager
-from data.ocr_result import OCRResult, PageResult, Block
+from connectors.docai_client import DocumentAIClient
+from data.ocr_result import OCRResult, PageResult, Block, BoundingBox
+from data.block_types import BlockType
 from pdf.text_layer import SearchablePDFGenerator
 from preproc.pdf_loader import PDFLoader
 from postproc.text_norm import TextNormalizer
-from router.heuristics import HeuristicRouter, DocumentCharacteristics
+from postproc.spell_checker import get_spell_corrector
 from util.logging import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +69,9 @@ class PDFOCRWorker(QRunnable):
         page_range: Optional[Tuple[int, int]] = None,
         thresholds: Optional[Dict[str, float]] = None,
         use_ensemble: bool = True,
+        output_directory: Optional[Path] = None,
+        export_formats: Optional[List[str]] = None,
+        table_settings: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize PDF OCR worker.
@@ -79,6 +84,9 @@ class PDFOCRWorker(QRunnable):
             page_range: Optional (start, end) page range
             thresholds: Confidence thresholds
             use_ensemble: Whether to use ensemble mode
+            output_directory: Directory to save output files (None = same as input)
+            export_formats: List of formats to export ('txt', 'json', 'markdown', 'searchable_pdf', 'tables_csv')
+            table_settings: Table extraction settings (enabled, min_rows, min_cols)
         """
         super().__init__()
         self.file_path = file_path
@@ -88,6 +96,9 @@ class PDFOCRWorker(QRunnable):
         self.page_range = page_range
         self.thresholds = thresholds or {}
         self.use_ensemble = use_ensemble
+        self.output_directory = output_directory
+        self.export_formats = export_formats or ['searchable_pdf']
+        self.table_settings = table_settings or {'enabled': False, 'min_rows': 3, 'min_cols': 2}
 
         self.signals = WorkerSignals()
         self.is_cancelled = False
@@ -98,11 +109,20 @@ class PDFOCRWorker(QRunnable):
             image_format=config.get('pdf', {}).get('image_format', 'PNG'),
         )
 
-        self.router = HeuristicRouter(config)
         self.normalizer = TextNormalizer()
+        self.spell_corrector = get_spell_corrector()
         self.pdf_generator = SearchablePDFGenerator(
             text_opacity=config.get('export', {}).get('pdf_text_opacity', 0)
         )
+
+        # Initialize DocAI client (only OCR engine used)
+        self.docai_client = None
+        try:
+            self.docai_client = DocumentAIClient()
+            self.signals.log_message.emit("DocAI client initialized (OCR + Form + Layout)")
+        except Exception as e:
+            logger.error(f"Failed to initialize DocAI client: {e}")
+            self.signals.log_message.emit(f"DocAI client init failed: {str(e)}")
 
     @pyqtSlot()
     def run(self):
@@ -153,6 +173,7 @@ class PDFOCRWorker(QRunnable):
                         'page_num': page_num,
                         'confidence': avg_confidence,
                         'blocks': len(page_result.blocks),
+                        'file_path': str(self.file_path),
                     })
 
                 except Exception as e:
@@ -170,14 +191,14 @@ class PDFOCRWorker(QRunnable):
                 doc_id=str(self.file_path),
             )
 
-            # Generate searchable PDF
-            self.signals.status_update.emit("Generating searchable PDF...")
-            output_pdf_path = self._generate_searchable_pdf(ocr_result)
+            # Export results in selected formats
+            self.signals.status_update.emit("Exporting results...")
+            output_files = self._export_results(ocr_result)
 
             # Prepare final result
             final_result = {
                 'file_path': str(self.file_path),
-                'output_pdf_path': str(output_pdf_path),
+                'output_files': output_files,
                 'total_pages': total_pages,
                 'low_confidence_pages': low_confidence_pages,
                 'average_confidence': self._calculate_document_confidence(ocr_result),
@@ -190,6 +211,7 @@ class PDFOCRWorker(QRunnable):
                 f"Completed: {self.file_path.name} "
                 f"({total_pages} pages, {len(low_confidence_pages)} low confidence)"
             )
+            self.signals.log_message.emit(f"Output files: {', '.join(str(f) for f in output_files.values())}")
 
         except Exception as e:
             error_msg = f"OCR processing failed: {str(e)}\n{traceback.format_exc()}"
@@ -202,7 +224,7 @@ class PDFOCRWorker(QRunnable):
 
     def _load_pdf_pages(self) -> List:
         """Load PDF pages with optional page range filtering."""
-        page_images = self.pdf_loader.load_pdf(
+        page_images = self.pdf_loader.load_pages(
             self.file_path,
             page_range=self.page_range
         )
@@ -232,71 +254,106 @@ class PDFOCRWorker(QRunnable):
             # Try to get from cache
             # For now, compute directly (cache integration with content hash would be more complex)
 
-        # Process with routing/ensemble
-        if self.engine == "auto":
-            page_result = self._process_with_routing(page_image, page_num)
-        else:
-            page_result = self._process_with_engine(page_image, page_num, self.engine)
+        # Process with DocAI (all three processors)
+        page_result = self._process_with_docai_all_processors(page_image, page_num)
 
         # Apply postprocessing
         page_result = self._apply_postprocessing(page_result)
 
         return page_result
 
-    def _process_with_routing(self, page_image, page_num: int) -> PageResult:
+
+    def _process_with_docai_all_processors(self, page_image, page_num: int) -> PageResult:
         """
-        Process page with intelligent routing.
+        Process with all available DocAI processors and merge results.
+
+        Uses OCR, Form Parser, and Layout Parser for comprehensive extraction.
 
         Args:
             page_image: PageImage object
             page_num: Page number
 
         Returns:
-            PageResult
+            PageResult with merged blocks from all processors
         """
-        # Analyze page characteristics
-        # For now, use a simple heuristic
-        # In production, this would call actual OCR engines
+        self.signals.log_message.emit(f"Processing page {page_num} with all DocAI processors...")
 
-        # TODO: Integrate with actual DocAI, Donut, TrOCR, etc.
-        # For now, create placeholder result
+        all_blocks = []
+        processors_used = []
 
-        blocks = []
-        page_result = PageResult(
+        # Try OCR Processor
+        if self.docai_client.processor_id_ocr:
+            try:
+                self.signals.log_message.emit(f"  → OCR Processor...")
+                ocr_blocks = self._process_with_docai(page_image, page_num, 'ocr')
+                if ocr_blocks:
+                    all_blocks.extend(ocr_blocks)
+                    processors_used.append('OCR')
+            except Exception as e:
+                logger.warning(f"OCR processor failed: {e}")
+
+        # Try Form Parser
+        if self.docai_client.processor_id_form:
+            try:
+                self.signals.log_message.emit(f"  → Form Parser...")
+                form_blocks = self._process_with_docai(page_image, page_num, 'form')
+                if form_blocks:
+                    all_blocks.extend(form_blocks)
+                    processors_used.append('Form')
+            except Exception as e:
+                logger.warning(f"Form parser failed: {e}")
+
+        # Try Layout Parser
+        if self.docai_client.processor_id_layout:
+            try:
+                self.signals.log_message.emit(f"  → Layout Parser...")
+                layout_blocks = self._process_with_docai(page_image, page_num, 'layout')
+                if layout_blocks:
+                    all_blocks.extend(layout_blocks)
+                    processors_used.append('Layout')
+            except Exception as e:
+                logger.warning(f"Layout parser failed: {e}")
+
+        # Deduplicate and merge blocks
+        merged_blocks = self._merge_docai_blocks(all_blocks)
+
+        self.signals.log_message.emit(
+            f"DocAI processors used: {', '.join(processors_used)} → {len(merged_blocks)} blocks"
+        )
+
+        return PageResult(
             page_number=page_num,
-            blocks=blocks,
+            blocks=merged_blocks,
             width=page_image.width,
             height=page_image.height,
         )
 
-        return page_result
-
-    def _process_with_engine(
-        self, page_image, page_num: int, engine: str
-    ) -> PageResult:
+    def _merge_docai_blocks(self, blocks: List[Block]) -> List[Block]:
         """
-        Process page with specific engine.
+        Merge blocks from multiple processors, removing duplicates.
 
-        Args:
-            page_image: PageImage object
-            page_num: Page number
-            engine: Engine name
-
-        Returns:
-            PageResult
+        Strategy:
+        - Keep blocks with highest confidence for overlapping regions
+        - Preserve unique blocks from each processor
         """
-        # TODO: Call specific engine
-        # For now, return placeholder
+        if not blocks:
+            return []
 
-        blocks = []
-        page_result = PageResult(
-            page_number=page_num,
-            blocks=blocks,
-            width=page_image.width,
-            height=page_image.height,
-        )
+        # Simple approach: deduplicate by text and keep highest confidence
+        unique_blocks = {}
 
-        return page_result
+        for block in blocks:
+            key = (block.text.strip(), tuple(block.bbox.__dict__.values()))
+
+            if key not in unique_blocks:
+                unique_blocks[key] = block
+            else:
+                # Keep block with higher confidence
+                if block.confidence > unique_blocks[key].confidence:
+                    unique_blocks[key] = block
+
+        return list(unique_blocks.values())
+
 
     def _apply_postprocessing(self, page_result: PageResult) -> PageResult:
         """
@@ -308,6 +365,9 @@ class PDFOCRWorker(QRunnable):
         Returns:
             Processed PageResult
         """
+        # Get spell correction setting
+        spell_correction = self.config.get('system', {}).get('spell_correction', 'Disabled')
+
         # Apply text normalization to each block
         for block in page_result.blocks:
             if block.text:
@@ -324,7 +384,150 @@ class PDFOCRWorker(QRunnable):
                     block.text = self.normalizer.normalize_dates(block.text)
                     block.text = self.normalizer.normalize_currency(block.text)
 
+                # Apply spell correction
+                if spell_correction and spell_correction != 'Disabled':
+                    try:
+                        original_text = block.text
+                        block.text = self.spell_corrector.correct(block.text, spell_correction)
+                        if block.text != original_text:
+                            logger.debug(f"Spell correction applied: '{original_text}' -> '{block.text}'")
+                    except Exception as e:
+                        logger.warning(f"Spell correction failed for block: {e}")
+
         return page_result
+
+    def _get_output_path(self, suffix: str) -> Path:
+        """
+        Get output file path with specified suffix.
+
+        Args:
+            suffix: File suffix (e.g., '_ocr.txt', '_ocr.pdf')
+
+        Returns:
+            Path for output file
+        """
+        if self.output_directory:
+            # Use specified output directory
+            output_dir = self.output_directory
+        else:
+            # Use same directory as input file
+            output_dir = self.file_path.parent
+
+        # Ensure output directory exists
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create output filename
+        base_name = self.file_path.stem
+        return output_dir / f"{base_name}{suffix}"
+
+    def _export_results(self, ocr_result: OCRResult) -> Dict[str, Path]:
+        """
+        Export OCR results in selected formats.
+
+        Args:
+            ocr_result: OCRResult to export
+
+        Returns:
+            Dictionary mapping format name to output file path
+        """
+        output_files = {}
+
+        try:
+            for format_type in self.export_formats:
+                if format_type == 'txt':
+                    output_path = self._export_txt(ocr_result)
+                    output_files['txt'] = output_path
+                    self.signals.log_message.emit(f"Saved TXT: {output_path}")
+
+                elif format_type == 'json':
+                    output_path = self._export_json(ocr_result)
+                    output_files['json'] = output_path
+                    self.signals.log_message.emit(f"Saved JSON: {output_path}")
+
+                elif format_type == 'markdown':
+                    output_path = self._export_markdown(ocr_result)
+                    output_files['markdown'] = output_path
+                    self.signals.log_message.emit(f"Saved Markdown: {output_path}")
+
+                elif format_type == 'searchable_pdf':
+                    output_path = self._generate_searchable_pdf(ocr_result)
+                    output_files['searchable_pdf'] = output_path
+                    self.signals.log_message.emit(f"Saved Searchable PDF: {output_path}")
+
+                elif format_type == 'tables_csv':
+                    table_files = self._export_tables_csv(ocr_result)
+                    if table_files:
+                        output_files['tables_csv'] = table_files
+                        self.signals.log_message.emit(f"Saved {len(table_files)} table(s) as CSV")
+
+        except Exception as e:
+            logger.error(f"Failed to export results: {e}")
+            self.signals.log_message.emit(f"Export error: {str(e)}")
+
+        return output_files
+
+    def _export_txt(self, ocr_result: OCRResult) -> Path:
+        """Export as plain text."""
+        try:
+            output_path = self._get_output_path('_ocr.txt')
+
+            lines = []
+            for page in ocr_result.pages:
+                for block in page.blocks:
+                    if block.text:
+                        lines.append(block.text)
+                lines.append('\n')  # Page separator
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+
+            logger.info(f"Saved TXT file: {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to export TXT: {e}")
+            raise
+
+    def _export_json(self, ocr_result: OCRResult) -> Path:
+        """Export as JSON."""
+        try:
+            import json
+            from dataclasses import asdict
+
+            output_path = self._get_output_path('_ocr.json')
+
+            # Convert to dict
+            result_dict = asdict(ocr_result)
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(result_dict, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"Saved JSON file: {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to export JSON: {e}")
+            raise
+
+    def _export_markdown(self, ocr_result: OCRResult) -> Path:
+        """Export as Markdown."""
+        try:
+            output_path = self._get_output_path('_ocr.md')
+
+            lines = ['# OCR Result\n']
+            for page in ocr_result.pages:
+                lines.append(f'## Page {page.page_number}\n')
+                for block in page.blocks:
+                    if block.text:
+                        lines.append(block.text)
+                        lines.append('')
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+
+            logger.info(f"Saved Markdown file: {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to export Markdown: {e}")
+            raise
 
     def _generate_searchable_pdf(self, ocr_result: OCRResult) -> Path:
         """
@@ -337,15 +540,108 @@ class PDFOCRWorker(QRunnable):
             Path to searchable PDF
         """
         try:
-            output_path = self.pdf_generator.create_from_ocr_result(
-                self.file_path,
+            output_path = self._get_output_path('_searchable.pdf')
+
+            logger.info(f"Generating searchable PDF: {output_path}")
+
+            # Use SearchablePDFGenerator to create searchable PDF
+            actual_output_path = self.pdf_generator.create_from_ocr_result(
+                input_pdf_path=self.file_path,
+                output_pdf_path=output_path,
                 ocr_result=ocr_result,
             )
-            return output_path
+
+            logger.info(f"Saved Searchable PDF: {actual_output_path}")
+            return actual_output_path
         except Exception as e:
             logger.error(f"Failed to generate searchable PDF: {e}")
+            self.signals.log_message.emit(f"Warning: Searchable PDF generation failed: {str(e)}")
             # Return original file if generation fails
             return self.file_path
+
+    def _export_tables_csv(self, ocr_result: OCRResult) -> List[Path]:
+        """
+        Export detected tables as CSV files.
+
+        Args:
+            ocr_result: OCRResult containing table data
+
+        Returns:
+            List of paths to exported CSV files
+        """
+        import csv
+
+        output_files = []
+        min_rows = self.table_settings.get('min_rows', 3)
+        min_cols = self.table_settings.get('min_cols', 2)
+
+        try:
+            table_count = 0
+
+            for page_idx, page in enumerate(ocr_result.pages, start=1):
+                # Check if page has tables
+                if not hasattr(page, 'tables') or not page.tables:
+                    continue
+
+                for table_idx, table in enumerate(page.tables, start=1):
+                    # Check table meets minimum requirements
+                    structure = table.get('structure', {})
+                    num_rows = structure.get('num_rows', 0)
+                    num_cols = structure.get('num_cols', 0)
+
+                    if num_rows < min_rows or num_cols < min_cols:
+                        logger.debug(f"Skipping table (page {page_idx}, table {table_idx}): "
+                                   f"{num_rows}x{num_cols} < minimum {min_rows}x{min_cols}")
+                        continue
+
+                    # Build table as 2D array
+                    cells = table.get('cells', [])
+                    if not cells:
+                        continue
+
+                    # Initialize 2D array
+                    table_array = [['' for _ in range(num_cols)] for _ in range(num_rows)]
+
+                    # Fill cells (handling spans)
+                    for cell in cells:
+                        row = cell.get('row', 0)
+                        col = cell.get('col', 0)
+                        text = cell.get('text', '').strip()
+                        row_span = cell.get('row_span', 1)
+                        col_span = cell.get('col_span', 1)
+
+                        # Fill cell and handle spans
+                        if row < num_rows and col < num_cols:
+                            table_array[row][col] = text
+
+                            # Mark spanned cells (optional: repeat value or leave empty)
+                            for r in range(row, min(row + row_span, num_rows)):
+                                for c in range(col, min(col + col_span, num_cols)):
+                                    if r == row and c == col:
+                                        continue  # Skip original cell
+                                    table_array[r][c] = ''  # Leave spanned cells empty
+
+                    # Export to CSV
+                    table_count += 1
+                    output_path = self._get_output_path(f'_table_p{page_idx}_t{table_idx}.csv')
+
+                    with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        writer = csv.writer(csvfile)
+                        writer.writerows(table_array)
+
+                    output_files.append(output_path)
+                    logger.info(f"Saved table CSV: {output_path} ({num_rows}x{num_cols})")
+
+            if table_count > 0:
+                self.signals.log_message.emit(f"Extracted {table_count} table(s) to CSV")
+            else:
+                self.signals.log_message.emit("No tables found meeting minimum criteria")
+
+        except Exception as e:
+            logger.error(f"Failed to export tables: {e}")
+            self.signals.log_message.emit(f"Warning: Table export failed: {str(e)}")
+
+        return output_files
 
     def _calculate_page_confidence(self, page_result: PageResult) -> float:
         """Calculate average confidence for page."""
@@ -376,36 +672,81 @@ class PDFOCRWorker(QRunnable):
 
         return '\n'.join(lines)
 
-    def _create_thumbnail(self, image: Image.Image, size: int = 100) -> QPixmap:
+    def _process_with_docai(self, page_image, page_num: int, processor_type: str = 'ocr') -> List[Block]:
         """
-        Create thumbnail from PIL Image.
+        Process page with Google Cloud Document AI.
 
         Args:
-            image: PIL Image
-            size: Thumbnail size
+            page_image: PageImage object
+            page_num: Page number
+            processor_type: 'ocr', 'form', or 'layout'
 
         Returns:
-            QPixmap thumbnail
+            List of Block objects
         """
-        try:
-            # Create thumbnail
-            image.thumbnail((size, size))
+        if not self.docai_client:
+            raise RuntimeError("DocAI client not initialized")
 
-            # Convert to QPixmap
-            if image.mode == 'RGB':
-                data = image.tobytes("raw", "RGB")
-                qimage = QImage(data, image.width, image.height, QImage.Format_RGB888)
-            else:
-                # Convert to RGB first
-                rgb_image = image.convert('RGB')
-                data = rgb_image.tobytes("raw", "RGB")
-                qimage = QImage(data, rgb_image.width, rgb_image.height, QImage.Format_RGB888)
+        self.signals.log_message.emit(f"Processing page {page_num} with DocAI ({processor_type})...")
 
-            return QPixmap.fromImage(qimage)
+        # Convert PIL image to bytes
+        img_bytes = io.BytesIO()
+        page_image.image.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
 
-        except Exception as e:
-            logger.error(f"Failed to create thumbnail: {e}")
-            return QPixmap()
+        # Process with DocAI
+        result = self.docai_client.process_and_extract(
+            input_data=img_bytes.read(),
+            processor_type=processor_type,
+            mime_type='image/png'
+        )
+
+        # Check for errors
+        if 'error' in result:
+            raise RuntimeError(f"DocAI error: {result['error']}")
+
+        # Convert to Block objects
+        blocks = []
+        if result.get('pages'):
+            page_data = result['pages'][0]  # Single page
+
+            for block_data in page_data.get('blocks', []):
+                # Convert bbox list to BoundingBox object
+                bbox_norm = block_data.get('bbox_norm', [0, 0, 0, 0])
+                if isinstance(bbox_norm, list) and len(bbox_norm) >= 4:
+                    bbox = BoundingBox(
+                        x=bbox_norm[0],
+                        y=bbox_norm[1],
+                        width=bbox_norm[2],
+                        height=bbox_norm[3],
+                        page=page_num - 1  # 0-indexed
+                    )
+                else:
+                    bbox = BoundingBox(x=0, y=0, width=0, height=0, page=page_num - 1)
+
+                # Map block type string to BlockType enum
+                block_type_str = block_data.get('type', 'paragraph')
+                if block_type_str == 'paragraph':
+                    block_type = BlockType.PARAGRAPH
+                elif block_type_str == 'line':
+                    block_type = BlockType.TEXT_BLOCK
+                else:
+                    block_type = BlockType.TEXT_BLOCK
+
+                block = Block(
+                    text=block_data.get('text', ''),
+                    bbox=bbox,
+                    confidence=block_data.get('conf', 1.0),
+                    block_type=block_type,
+                )
+                blocks.append(block)
+
+        self.signals.log_message.emit(
+            f"DocAI processed page {page_num}: {len(blocks)} blocks, "
+            f"avg confidence: {result.get('pages', [{}])[0].get('avg_conf', 0):.2f}"
+        )
+
+        return blocks
 
 
 class PageOCRWorker(QRunnable):
