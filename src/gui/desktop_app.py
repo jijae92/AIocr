@@ -1364,7 +1364,6 @@ class HybridOCRApp(QMainWindow):
 
         # Prepare thresholds
         thresholds = {
-            'docai_confidence': self.docai_threshold.value(),
             'low_confidence': self.low_conf_threshold.value(),
         }
 
