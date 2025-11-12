@@ -214,10 +214,16 @@ class SearchablePDFGenerator:
             fill_color = (1, 1, 1, 1 - opacity)  # Semi-transparent white background
 
         # Insert text into PDF
+        # Add explicit newline after each block to help PDF readers separate blocks correctly
+        # This ensures that blocks on the same Y-level (like table cells) are extracted separately
         try:
+            # Append newline to ensure block separation during text extraction
+            # This helps prevent PyMuPDF from merging adjacent blocks into a single line
+            text_with_newline = text + "\n"
+
             rc = page.insert_textbox(
                 rect,
-                text,
+                text_with_newline,
                 fontname=self.font_name,
                 fontsize=font_size,
                 color=color,
