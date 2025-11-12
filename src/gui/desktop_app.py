@@ -441,6 +441,8 @@ class HybridOCRApp(QMainWindow):
 
         # Processing options (collapsible)
         options_group = CollapsibleBox("Processing Options")
+        options_group.toggle_button.setChecked(False)
+        options_group.content_area.setVisible(False)
         options_layout = QFormLayout()
 
         # Page range
@@ -488,10 +490,8 @@ class HybridOCRApp(QMainWindow):
         options_group.addLayout(options_layout)
         layout.addWidget(options_group)
 
-        # Advanced options (collapsible, initially collapsed)
+        # Advanced options (collapsible, initially open for Performance settings)
         advanced_group = CollapsibleBox("Advanced Options")
-        advanced_group.toggle_button.setChecked(False)
-        advanced_group.content_area.setVisible(False)
         advanced_group.update_button_text()
         advanced_layout = QFormLayout()
 
@@ -552,8 +552,10 @@ class HybridOCRApp(QMainWindow):
         advanced_group.addLayout(advanced_layout)
         layout.addWidget(advanced_group)
 
-        # Hardware Acceleration section (collapsible)
+        # Hardware Acceleration section (collapsible, initially collapsed)
         hardware_group = CollapsibleBox("Hardware Acceleration")
+        hardware_group.toggle_button.setChecked(False)
+        hardware_group.content_area.setVisible(False)
         hardware_layout = QVBoxLayout()
 
         # GPU Info display
@@ -610,8 +612,10 @@ class HybridOCRApp(QMainWindow):
         hardware_group.addLayout(hardware_layout)
         layout.addWidget(hardware_group)
 
-        # System Options section (collapsible)
+        # System Options section (collapsible, initially collapsed)
         system_group = CollapsibleBox("System Options")
+        system_group.toggle_button.setChecked(False)
+        system_group.content_area.setVisible(False)
         system_layout = QVBoxLayout()
 
         # Language-specific spell correction
