@@ -355,6 +355,44 @@ class PDFOCRWorker(QRunnable):
         return list(unique_blocks.values())
 
 
+    def _postprocess_text(self, text: str) -> str:
+        """
+        Apply postprocessing to a single text string.
+
+        Args:
+            text: Text to process
+
+        Returns:
+            Processed text
+        """
+        if not text:
+            return text
+
+        # Get spell correction setting
+        spell_correction = self.config.get('system', {}).get('spell_correction', 'Disabled')
+
+        # Normalize whitespace
+        if self.config.get('postprocessing', {}).get('normalize_whitespace', True):
+            text = self.normalizer.normalize_whitespace(text)
+
+        # Korean spacing (apply if text contains Korean characters)
+        if any('\uac00' <= char <= '\ud7a3' for char in text):
+            text = self.normalizer.normalize_korean_spacing(text)
+
+        # Normalize dates, currency, etc.
+        if self.config.get('postprocessing', {}).get('fix_common_errors', True):
+            text = self.normalizer.normalize_dates(text)
+            text = self.normalizer.normalize_currency(text)
+
+        # Apply spell correction
+        if spell_correction and spell_correction != 'Disabled':
+            try:
+                text = self.spell_corrector.correct(text, spell_correction)
+            except Exception as e:
+                logger.warning(f"Spell correction failed: {e}")
+
+        return text
+
     def _apply_postprocessing(self, page_result: PageResult) -> PageResult:
         """
         Apply postprocessing to page result.
@@ -365,34 +403,10 @@ class PDFOCRWorker(QRunnable):
         Returns:
             Processed PageResult
         """
-        # Get spell correction setting
-        spell_correction = self.config.get('system', {}).get('spell_correction', 'Disabled')
-
         # Apply text normalization to each block
         for block in page_result.blocks:
             if block.text:
-                # Normalize whitespace
-                if self.config.get('postprocessing', {}).get('normalize_whitespace', True):
-                    block.text = self.normalizer.normalize_whitespace(block.text)
-
-                # Korean spacing
-                if 'ko' in str(block.language):
-                    block.text = self.normalizer.normalize_korean_spacing(block.text)
-
-                # Normalize dates, currency, etc.
-                if self.config.get('postprocessing', {}).get('fix_common_errors', True):
-                    block.text = self.normalizer.normalize_dates(block.text)
-                    block.text = self.normalizer.normalize_currency(block.text)
-
-                # Apply spell correction
-                if spell_correction and spell_correction != 'Disabled':
-                    try:
-                        original_text = block.text
-                        block.text = self.spell_corrector.correct(block.text, spell_correction)
-                        if block.text != original_text:
-                            logger.debug(f"Spell correction applied: '{original_text}' -> '{block.text}'")
-                    except Exception as e:
-                        logger.warning(f"Spell correction failed for block: {e}")
+                block.text = self._postprocess_text(block.text)
 
         return page_result
 
@@ -609,6 +623,10 @@ class PDFOCRWorker(QRunnable):
                         text = cell.get('text', '').strip()
                         row_span = cell.get('row_span', 1)
                         col_span = cell.get('col_span', 1)
+
+                        # Apply postprocessing to table cell text
+                        if text:
+                            text = self._postprocess_text(text)
 
                         # Fill cell and handle spans
                         if row < num_rows and col < num_cols:
