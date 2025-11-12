@@ -1464,7 +1464,7 @@ class HybridOCRApp(QMainWindow):
                 engine=engine,
                 page_range=page_range,
                 thresholds=thresholds,
-                use_ensemble=self.ensemble_check.isChecked(),
+                use_ensemble=True,  # Always use ensemble mode
                 output_directory=self.output_directory,
                 export_formats=export_formats,
                 table_settings=table_settings,
