@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened Runtime Entitlements for Hybrid PDF OCR -->
+
+    <!-- Allow JIT compilation (required for PyTorch, TensorFlow) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Allow unsigned executable memory (required for Python, numpy) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Disable library validation (required for pip-installed packages) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Allow DYLD environment variables (for dynamic library loading) -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Disable executable memory protection (for JIT) -->
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
+
+    <!-- Network Access -->
+    <!-- Client: Required for DocAI API, model downloads -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Server: Optional, if running local services -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- File Access -->
+    <!-- User-selected files (PDF imports) -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Downloads folder access -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+
+    <!-- Temporary folder access -->
+    <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+    <array>
+        <string>/tmp/</string>
+        <string>/var/tmp/</string>
+    </array>
+
+    <!-- Home directory access (for .cache, configs) -->
+    <key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+    <array>
+        <string>.cache/hybrid-pdf-ocr/</string>
+        <string>.config/hybrid-pdf-ocr/</string>
+        <string>Library/Caches/hybrid-pdf-ocr/</string>
+    </array>
+
+    <!-- Camera and Photo Library (optional, for document capture) -->
+    <key>com.apple.security.device.camera</key>
+    <false/>
+
+    <key>com.apple.security.assets.pictures.read-write</key>
+    <false/>
+
+    <!-- Audio/Video (not needed for OCR, but included for completeness) -->
+    <key>com.apple.security.device.audio-input</key>
+    <false/>
+
+    <!-- Printing (if implementing print functionality) -->
+    <key>com.apple.security.print</key>
+    <true/>
+
+    <!-- Note: Some entitlements may cause notarization issues.
+         If notarization fails, try removing:
+         - com.apple.security.cs.allow-unsigned-executable-memory
+         - com.apple.security.cs.allow-dyld-environment-variables
+         - com.apple.security.cs.disable-executable-page-protection
+
+         However, these are often required for Python/ML frameworks.
+         Test thoroughly to ensure app still works without them.
+    -->
+</dict>
+</plist>
