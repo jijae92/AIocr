@@ -139,15 +139,16 @@ class DropZoneWidget(QWidget):
             QLabel {
                 border: 2px dashed #aaa;
                 border-radius: 10px;
-                padding: 40px;
+                padding: 60px;
                 background-color: #f8f8f8;
-                font-size: 14px;
+                font-size: 16px;
+                font-weight: bold;
                 color: #666;
             }
         """)
         layout.addWidget(self.label)
 
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(180)
 
     def dragEnterEvent(self, event):
         """Handle drag enter event."""
@@ -157,9 +158,10 @@ class DropZoneWidget(QWidget):
                 QLabel {
                     border: 2px dashed #4CAF50;
                     border-radius: 10px;
-                    padding: 40px;
+                    padding: 60px;
                     background-color: #e8f5e9;
-                    font-size: 14px;
+                    font-size: 16px;
+                    font-weight: bold;
                     color: #2e7d32;
                 }
             """)
@@ -170,9 +172,10 @@ class DropZoneWidget(QWidget):
             QLabel {
                 border: 2px dashed #aaa;
                 border-radius: 10px;
-                padding: 40px;
+                padding: 60px;
                 background-color: #f8f8f8;
-                font-size: 14px;
+                font-size: 16px;
+                font-weight: bold;
                 color: #666;
             }
         """)
@@ -376,8 +379,8 @@ class HybridOCRApp(QMainWindow):
         self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.queue_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.queue_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.queue_table.setMinimumHeight(400)
-        self.queue_table.setMaximumHeight(600)
+        self.queue_table.setMinimumHeight(200)
+        self.queue_table.setMaximumHeight(300)
         self.queue_table.setStyleSheet("""
             QTableWidget {
                 border: 1px solid #555;
