@@ -1,0 +1,336 @@
+# OCR Routing and Ensemble Configuration
+
+# Model Priority Order (highest to lowest)
+model_priority:
+  - docai
+  - donut
+  - trocr
+  - tatr
+  - pix2tex
+
+# Confidence Thresholds
+thresholds:
+  # DocAI acceptance threshold
+  docai_confidence: 0.85
+
+  # Low confidence threshold - triggers fallback to other models
+  low_confidence: 0.5
+
+  # High confidence threshold - accept without validation
+  high_confidence: 0.95
+
+  # Table complexity threshold (number of cells)
+  simple_table_cells: 50
+
+  # Multi-column detection threshold (column count)
+  multi_column_threshold: 2
+
+  # Formula detection confidence
+  formula_confidence: 0.7
+
+  # Numeric content detection threshold
+  numeric_content_ratio: 0.7
+
+# Language Configuration
+language:
+  # Supported languages for DocAI
+  docai_languages:
+    - ko  # Korean
+    - en  # English
+    - ja  # Japanese
+    - zh  # Chinese
+
+  # Fallback language when detection fails
+  default_language: en
+
+  # Language detection confidence threshold
+  language_confidence: 0.8
+
+# Layout Complexity Detection
+layout:
+  # Maximum tables per page for "simple" classification
+  simple_max_tables: 2
+
+  # Maximum tables per page for "moderate" classification
+  moderate_max_tables: 5
+
+  # Text block density threshold (blocks per 1000 pixels²)
+  high_density_threshold: 0.5
+
+  # Column detection parameters
+  column_detection:
+    min_gap_ratio: 0.05  # Minimum horizontal gap to detect columns
+    min_column_width_ratio: 0.3  # Minimum column width relative to page
+
+# Model-Specific Configuration
+models:
+  docai:
+    # DocAI is preferred when:
+    # - Confidence >= threshold
+    # - Language is supported
+    # - Layout is simple to moderate
+    enabled: true
+    timeout_seconds: 30
+    max_pages_per_request: 50
+    retry_attempts: 3
+
+  donut:
+    # Donut is used when:
+    # - DocAI confidence is low
+    # - Complex multi-column layouts
+    # - Many tables present
+    enabled: true
+    timeout_seconds: 60
+    batch_size: 4
+    max_image_size: 2560
+
+  trocr:
+    # TrOCR ONNX is used for:
+    # - Numeric content validation
+    # - Code/ID recognition
+    # - Date/time parsing
+    # - Cross-validation of critical fields
+    enabled: true
+    timeout_seconds: 20
+    use_onnx: true
+    onnx_providers:
+      - CUDAExecutionProvider
+      - CPUExecutionProvider
+    content_patterns:
+      - numeric
+      - date
+      - code
+      - alphanumeric
+
+  tatr:
+    # TATR (Table Transformer) is used for:
+    # - Table structure recovery
+    # - Complex table parsing
+    enabled: true
+    timeout_seconds: 45
+    min_table_confidence: 0.6
+    cell_detection_threshold: 0.5
+
+  pix2tex:
+    # pix2tex is used for:
+    # - Mathematical formula extraction
+    # - LaTeX generation
+    enabled: true
+    timeout_seconds: 30
+    min_formula_size: 20  # Minimum pixel width/height
+    temperature: 0.1  # Sampling temperature
+
+# Routing Heuristics
+routing:
+  # Strategy for model selection
+  strategy: adaptive  # Options: adaptive, fixed, confidence_based
+
+  # Parallel model execution
+  parallel_execution: false
+  max_parallel_models: 3
+
+  # Per-block routing decisions
+  block_level_routing: true
+
+  # Fallback cascade order
+  fallback_cascade:
+    - docai
+    - donut
+    - trocr
+
+  # Content-specific routing
+  content_routing:
+    tables:
+      primary: tatr
+      fallback: docai
+      validation: donut
+
+    formulas:
+      primary: pix2tex
+      fallback: donut
+
+    numeric:
+      primary: trocr
+      validation: docai
+      substitution_on_mismatch: true
+
+    code:
+      primary: trocr
+      fallback: donut
+
+    dates:
+      primary: trocr
+      validation: docai
+      format_normalization: true
+
+    general_text:
+      primary: docai
+      fallback: donut
+
+# Ensemble Configuration
+ensemble:
+  # Enable ensemble mode (use multiple models)
+  enabled: true
+
+  # Ensemble strategy
+  strategy: weighted_voting  # Options: voting, weighted_voting, consensus, confidence_max
+
+  # Minimum models for ensemble
+  min_models: 2
+
+  # Maximum models for ensemble
+  max_models: 3
+
+  # Confidence weight factors
+  weights:
+    docai: 1.5
+    donut: 1.2
+    trocr: 1.0
+    tatr: 1.3
+    pix2tex: 1.1
+
+  # Conflict resolution
+  conflict_resolution:
+    # How to handle text conflicts
+    text_mismatch: use_highest_confidence
+
+    # How to handle bounding box conflicts
+    bbox_overlap_threshold: 0.5
+    bbox_merge_strategy: union
+
+    # Voting threshold for consensus
+    consensus_threshold: 0.6
+
+  # Cross-validation rules
+  cross_validation:
+    # Validate numeric content across models
+    numeric_fields: true
+
+    # Maximum allowed difference for numeric validation
+    numeric_tolerance: 0.01
+
+    # Validate dates across models
+    date_fields: true
+
+    # Validate table cell counts
+    table_structure: true
+
+# Layout Merge Configuration
+layout_merge:
+  # Reading order detection method
+  reading_order_method: spatial_analysis  # Options: spatial_analysis, neural, hybrid
+
+  # Reading direction
+  primary_direction: top_to_bottom
+  secondary_direction: left_to_right
+
+  # Merge parameters
+  merge:
+    # Minimum vertical gap to separate paragraphs (relative to font height)
+    paragraph_gap_threshold: 1.5
+
+    # Maximum horizontal gap for same line (relative to character width)
+    same_line_gap_threshold: 2.0
+
+    # Column detection sensitivity
+    column_detection_sensitivity: 0.7
+
+  # Source/confidence labeling
+  preserve_metadata:
+    model_source: true
+    confidence_scores: true
+    bounding_boxes: true
+    block_types: true
+    timestamps: true
+
+# Performance Configuration
+performance:
+  # Cache OCR results
+  enable_cache: true
+  cache_ttl_seconds: 3600
+
+  # Image preprocessing
+  preprocessing:
+    # Resize large images
+    max_dimension: 4096
+
+    # Image quality enhancement
+    enhance_contrast: true
+    denoise: true
+    deskew: true
+
+    # DPI normalization
+    target_dpi: 300
+
+  # Memory limits
+  max_memory_mb: 8192
+
+  # GPU configuration
+  use_gpu: true
+  gpu_memory_fraction: 0.8
+
+# Logging Configuration
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+  # Log routing decisions
+  log_routing_decisions: true
+
+  # Log confidence scores
+  log_confidence_scores: true
+
+  # Log processing times
+  log_timing: true
+
+  # Output format
+  format: json
+
+  # Log file rotation
+  rotation:
+    max_size_mb: 100
+    backup_count: 5
+
+# Quality Assurance
+quality:
+  # Minimum acceptable confidence for output
+  min_output_confidence: 0.6
+
+  # Flag low-confidence results
+  flag_low_confidence: true
+  low_confidence_marker: "[?]"
+
+  # Post-processing validation
+  validation:
+    # Check for common OCR errors
+    common_errors: true
+
+    # Spell check (if language model available)
+    spell_check: false
+
+    # Format validation (emails, phones, etc.)
+    format_validation: true
+
+  # Quality metrics to track
+  metrics:
+    - average_confidence
+    - processing_time
+    - model_distribution
+    - error_rate
+    - coverage
+
+# Error Handling
+error_handling:
+  # Retry failed requests
+  retry_on_failure: true
+  max_retries: 3
+  retry_delay_seconds: 2
+  exponential_backoff: true
+
+  # Fallback behavior
+  fallback_on_error: true
+
+  # Continue on partial failures
+  partial_failure_mode: continue
+
+  # Error notification
+  notify_on_error: false
