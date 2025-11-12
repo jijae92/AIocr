@@ -265,9 +265,11 @@ class PDFOCRWorker(QRunnable):
 
     def _process_with_docai_all_processors(self, page_image, page_num: int) -> PageResult:
         """
-        Process with all available DocAI processors and merge results.
+        Process with DocAI processors, adaptively using more processors if tables detected.
 
-        Uses OCR, Form Parser, and Layout Parser for comprehensive extraction.
+        Strategy:
+        1. Start with OCR processor
+        2. If tables detected, add Form/Layout parsers for better table extraction
 
         Args:
             page_image: PageImage object
@@ -276,26 +278,41 @@ class PDFOCRWorker(QRunnable):
         Returns:
             PageResult with merged blocks from all processors
         """
-        self.signals.log_message.emit(f"Processing page {page_num} with all DocAI processors...")
+        self.signals.log_message.emit(f"Processing page {page_num} with DocAI...")
 
         all_blocks = []
         processors_used = []
+        has_tables = False
+        ocr_result = None
 
-        # Try OCR Processor
+        # Always try OCR Processor first
         if self.docai_client.processor_id_ocr:
             try:
                 self.signals.log_message.emit(f"  → OCR Processor...")
-                ocr_blocks = self._process_with_docai(page_image, page_num, 'ocr')
+
+                # Process with DocAI and get both blocks and tables
+                ocr_blocks, ocr_tables = self._process_with_docai_and_detect_tables(
+                    page_image, page_num, 'ocr'
+                )
+
                 if ocr_blocks:
                     all_blocks.extend(ocr_blocks)
                     processors_used.append('OCR')
+
+                # Check if tables were detected
+                if ocr_tables:
+                    has_tables = True
+                    self.signals.log_message.emit(
+                        f"  ✓ Detected {len(ocr_tables)} table(s), using Form/Layout parsers..."
+                    )
+
             except Exception as e:
                 logger.warning(f"OCR processor failed: {e}")
 
-        # Try Form Parser
-        if self.docai_client.processor_id_form:
+        # If tables detected, use Form Parser for better table extraction
+        if has_tables and self.docai_client.processor_id_form:
             try:
-                self.signals.log_message.emit(f"  → Form Parser...")
+                self.signals.log_message.emit(f"  → Form Parser (for tables)...")
                 form_blocks = self._process_with_docai(page_image, page_num, 'form')
                 if form_blocks:
                     all_blocks.extend(form_blocks)
@@ -303,10 +320,10 @@ class PDFOCRWorker(QRunnable):
             except Exception as e:
                 logger.warning(f"Form parser failed: {e}")
 
-        # Try Layout Parser
-        if self.docai_client.processor_id_layout:
+        # If tables detected, use Layout Parser for better structure understanding
+        if has_tables and self.docai_client.processor_id_layout:
             try:
-                self.signals.log_message.emit(f"  → Layout Parser...")
+                self.signals.log_message.emit(f"  → Layout Parser (for tables)...")
                 layout_blocks = self._process_with_docai(page_image, page_num, 'layout')
                 if layout_blocks:
                     all_blocks.extend(layout_blocks)
@@ -689,6 +706,84 @@ class PDFOCRWorker(QRunnable):
                 lines.append('\n')  # Page separator
 
         return '\n'.join(lines)
+
+    def _process_with_docai_and_detect_tables(
+        self, page_image, page_num: int, processor_type: str = 'ocr'
+    ) -> tuple[List[Block], List[dict]]:
+        """
+        Process page with DocAI and return both blocks and tables.
+
+        Args:
+            page_image: PageImage object
+            page_num: Page number
+            processor_type: 'ocr', 'form', or 'layout'
+
+        Returns:
+            Tuple of (blocks, tables)
+        """
+        if not self.docai_client:
+            raise RuntimeError("DocAI client not initialized")
+
+        # Convert PIL image to bytes
+        img_bytes = io.BytesIO()
+        page_image.image.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+
+        # Process with DocAI
+        result = self.docai_client.process_and_extract(
+            input_data=img_bytes.read(),
+            processor_type=processor_type,
+            mime_type='image/png'
+        )
+
+        # Check for errors
+        if 'error' in result:
+            raise RuntimeError(f"DocAI error: {result['error']}")
+
+        blocks = []
+        tables = []
+
+        # Extract blocks and tables from result
+        if result.get('pages'):
+            page_data = result['pages'][0]  # Single page
+
+            # Extract blocks
+            for block_data in page_data.get('blocks', []):
+                # Convert bbox list to BoundingBox object
+                bbox_norm = block_data.get('bbox_norm', [0, 0, 0, 0])
+                if isinstance(bbox_norm, list) and len(bbox_norm) >= 4:
+                    bbox = BoundingBox(
+                        x=bbox_norm[0],
+                        y=bbox_norm[1],
+                        width=bbox_norm[2],
+                        height=bbox_norm[3],
+                        page=page_num - 1
+                    )
+                else:
+                    bbox = BoundingBox(x=0, y=0, width=0, height=0, page=page_num - 1)
+
+                # Map block type
+                block_type_str = block_data.get('type', 'paragraph')
+                if block_type_str == 'paragraph':
+                    block_type = BlockType.PARAGRAPH
+                elif block_type_str == 'line':
+                    block_type = BlockType.TEXT_BLOCK
+                else:
+                    block_type = BlockType.TEXT_BLOCK
+
+                block = Block(
+                    text=block_data.get('text', ''),
+                    bbox=bbox,
+                    confidence=block_data.get('conf', 1.0),
+                    block_type=block_type,
+                    language=block_data.get('language')
+                )
+                blocks.append(block)
+
+            # Extract tables
+            tables = page_data.get('tables', [])
+
+        return blocks, tables
 
     def _process_with_docai(self, page_image, page_num: int, processor_type: str = 'ocr') -> List[Block]:
         """
