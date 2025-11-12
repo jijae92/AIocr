@@ -281,7 +281,7 @@ class HybridOCRApp(QMainWindow):
     def init_ui(self):
         """Initialize comprehensive UI."""
         self.setWindowTitle("Hybrid PDF OCR System")
-        self.setGeometry(100, 100, 1400, 900)
+        self.setGeometry(100, 100, 1600, 1000)
 
         # Central widget with tab interface
         central_widget = QWidget()
@@ -376,7 +376,8 @@ class HybridOCRApp(QMainWindow):
         self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.queue_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.queue_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.queue_table.setMaximumHeight(250)
+        self.queue_table.setMinimumHeight(400)
+        self.queue_table.setMaximumHeight(600)
         self.queue_table.setStyleSheet("""
             QTableWidget {
                 border: 1px solid #555;
