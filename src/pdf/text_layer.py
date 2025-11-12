@@ -213,30 +213,68 @@ class SearchablePDFGenerator:
             opacity = self.text_opacity / 255.0
             fill_color = (1, 1, 1, 1 - opacity)  # Semi-transparent white background
 
-        # Insert text into PDF
-        # Add explicit newline after each block to help PDF readers separate blocks correctly
-        # This ensures that blocks on the same Y-level (like table cells) are extracted separately
+        # Insert text into PDF using insert_text instead of insert_textbox
+        # This creates separate text objects for each block, improving extraction order
         try:
-            # Append newline to ensure block separation during text extraction
-            # This helps prevent PyMuPDF from merging adjacent blocks into a single line
-            text_with_newline = text + "\n"
+            # Calculate text position (baseline, not top-left)
+            # Y coordinate should be adjusted for baseline
+            text_point = fitz.Point(x0, y0 + font_size * 0.8)
 
-            rc = page.insert_textbox(
-                rect,
-                text_with_newline,
-                fontname=self.font_name,
-                fontsize=font_size,
-                color=color,
-                fill=fill_color,
-                align=fitz.TEXT_ALIGN_LEFT,
-                overlay=True,
-                rotate=0,
-            )
+            # Split long text into multiple lines if needed to fit in rect
+            # Calculate approximate number of characters per line
+            if rect.width > 0 and font_size > 0:
+                chars_per_line = int(rect.width / (font_size * 0.5))
+                if chars_per_line < 1:
+                    chars_per_line = 1
 
-            if rc < 0:
-                logger.debug(
-                    f"Text overflow for block: '{text[:50]}...' "
-                    f"(font_size={font_size:.1f}, rect={rect})"
+                # Simple line wrapping
+                words = text.split()
+                lines = []
+                current_line = []
+                current_length = 0
+
+                for word in words:
+                    word_length = len(word) + 1  # +1 for space
+                    if current_length + word_length > chars_per_line and current_line:
+                        lines.append(' '.join(current_line))
+                        current_line = [word]
+                        current_length = word_length
+                    else:
+                        current_line.append(word)
+                        current_length += word_length
+
+                if current_line:
+                    lines.append(' '.join(current_line))
+
+                # Insert each line separately to maintain block structure
+                for i, line in enumerate(lines):
+                    if i > 0:
+                        text_point.y += font_size * 1.2  # Line spacing
+
+                    # Stop if we exceed rect bounds
+                    if text_point.y > y1:
+                        logger.debug(f"Text exceeds rect bounds, truncating")
+                        break
+
+                    rc = page.insert_text(
+                        text_point,
+                        line + "\n",  # Add newline for block separation
+                        fontname=self.font_name,
+                        fontsize=font_size,
+                        color=color if color else (0, 0, 0),
+                        overlay=True,
+                        render_mode=3 if self.text_opacity == 0 else 0,  # 3 = invisible
+                    )
+            else:
+                # Fallback to simple insertion
+                rc = page.insert_text(
+                    text_point,
+                    text + "\n",
+                    fontname=self.font_name,
+                    fontsize=font_size,
+                    color=color if color else (0, 0, 0),
+                    overlay=True,
+                    render_mode=3 if self.text_opacity == 0 else 0,
                 )
 
         except Exception as e:
