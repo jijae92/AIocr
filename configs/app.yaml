@@ -173,6 +173,24 @@ routing:
   # Strategy for model selection
   strategy: adaptive  # Options: adaptive, fixed, confidence_based
 
+  # DocAI confidence threshold (when to accept DocAI result)
+  docai_conf_threshold: 0.88
+
+  # Engine-specific timeouts (milliseconds)
+  donut_timeout_ms: 3000
+  trocr_timeout_ms: 2000
+  tatr_timeout_ms: 4500
+
+  # TrOCR pattern-based substitution (regex patterns for replacement)
+  trocr_replace_patterns:
+    - "\\d{3}-\\d{2}-\\d{5}"  # SSN-like patterns
+    - "\\d{4}-\\d{2}-\\d{2}"  # Date patterns (YYYY-MM-DD)
+    - "\\d{2}/\\d{2}/\\d{4}"  # Date patterns (MM/DD/YYYY)
+    - "[A-Z]{2}\\d{6}"        # Code patterns (e.g., AB123456)
+
+  # Prefer table-specific engine for table content
+  prefer_table_engine: true
+
   # Parallel model execution
   parallel_execution: false
   max_parallel_models: 3
@@ -291,7 +309,14 @@ layout_merge:
     block_types: true
     timestamps: true
 
-# Preprocessing
+# Preprocessing (Simplified Configuration)
+preproc:
+  # DPI for image conversion
+  dpi: 300
+  # Enable image enhancement (contrast, denoise, deskew)
+  enhance: true
+
+# Preprocessing (Detailed Configuration)
 preprocessing:
   # Auto-rotate based on orientation detection
   auto_rotate: true
@@ -337,6 +362,13 @@ export:
   include_bboxes: true
   # Searchable PDF: text layer opacity (0-255, 0=invisible)
   pdf_text_opacity: 0
+
+# Runtime Configuration (Simplified)
+runtime:
+  # Maximum worker threads for parallel processing
+  max_workers: 4
+  # Device: mps (Apple Silicon), cpu
+  device: "mps"
 
 # Performance Configuration
 performance:
@@ -433,18 +465,65 @@ error_handling:
   # Error notification
   notify_on_error: false
 
-# Evaluation
+# Evaluation & Benchmarking
 evaluation:
   # Ground truth directory
   ground_truth_dir: "tests/data/ground_truth"
-  # Metrics: cer, wer, accuracy
-  metrics: ["cer", "wer"]
-  # Table evaluation: TEDS, cell_f1
-  table_metrics: ["teds", "cell_f1"]
-  # Generate error analysis report
-  error_analysis: true
+
+  # Input data directory
+  test_data_dir: "tests/data"
+
+  # Output reports directory
+  reports_dir: "reports"
+
+  # OCR Metrics: Character Error Rate, Word Error Rate, Accuracy
+  metrics:
+    - cer
+    - wer
+    - accuracy
+
+  # Table evaluation: TEDS (Tree Edit Distance based Similarity), Cell F1
+  table_metrics:
+    - teds
+    - cell_f1
+
+  # Performance metrics
+  performance_metrics:
+    - p95_latency      # 95th percentile latency
+    - avg_latency      # Average latency
+    - engine_hit_rate  # Engine hit rate (which engine was used)
+    - throughput       # Pages per second
+
+  # Error analysis configuration
+  error_analysis:
+    enabled: true
+    # Generate page thumbnails for failed pages
+    generate_thumbnails: true
+    # Thumbnail size (pixels)
+    thumbnail_size: 200
+    # Show prediction vs ground truth diff
+    show_diff: true
+    # Include routing decision reason in error report
+    include_routing_reason: true
+    # Maximum errors to display
+    max_errors_displayed: 50
+
   # Save predictions for review
   save_predictions: true
+
+  # Output formats
+  output_formats:
+    - csv    # Metrics in CSV format
+    - md     # Markdown report
+    - json   # Detailed JSON results
+
+  # Comparison mode (compare multiple models/configs)
+  comparison:
+    enabled: false
+    baseline_model: "docai"
+    models_to_compare:
+      - donut
+      - trocr
 
 # GUI Settings
 gui:
