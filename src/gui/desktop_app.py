@@ -137,13 +137,13 @@ class DropZoneWidget(QWidget):
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setStyleSheet("""
             QLabel {
-                border: 2px dashed #999;
+                border: 2px dashed #666;
                 border-radius: 10px;
                 padding: 30px 40px;
-                background-color: #e0e0e0;
+                background-color: #c0c0c0;
                 font-size: 14px;
                 font-weight: bold;
-                color: #555;
+                color: #333;
                 line-height: 1.8;
             }
         """)
@@ -173,13 +173,13 @@ class DropZoneWidget(QWidget):
         """Handle drag leave event."""
         self.label.setStyleSheet("""
             QLabel {
-                border: 2px dashed #999;
+                border: 2px dashed #666;
                 border-radius: 10px;
                 padding: 30px 40px;
-                background-color: #e0e0e0;
+                background-color: #c0c0c0;
                 font-size: 14px;
                 font-weight: bold;
-                color: #555;
+                color: #333;
                 line-height: 1.8;
             }
         """)
@@ -198,13 +198,13 @@ class DropZoneWidget(QWidget):
         # Reset style
         self.label.setStyleSheet("""
             QLabel {
-                border: 2px dashed #999;
+                border: 2px dashed #666;
                 border-radius: 10px;
                 padding: 30px 40px;
-                background-color: #e0e0e0;
+                background-color: #c0c0c0;
                 font-size: 14px;
                 font-weight: bold;
-                color: #555;
+                color: #333;
                 line-height: 1.8;
             }
         """)
