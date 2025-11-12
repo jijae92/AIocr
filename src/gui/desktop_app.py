@@ -1154,10 +1154,10 @@ class HybridOCRApp(QMainWindow):
 
     def clear_all_files(self):
         """Clear all files and reset progress."""
-        # Clear file list
-        self.file_list.clear()
+        # Clear file list and queue
         self.selected_files.clear()
         self.file_queue_status.clear()
+        self.update_queue_table()
 
         # Reset progress
         self.progress_bar.setValue(0)
@@ -1491,8 +1491,44 @@ class HybridOCRApp(QMainWindow):
 
     def reprocess_low_confidence(self):
         """Reprocess pages with low confidence (button callback)."""
-        # TODO: Implement reprocessing of low confidence pages from failed_pages
-        self.log("Reprocessing low confidence pages...")
+        if not self.failed_pages and not self.low_confidence_pages:
+            QMessageBox.information(
+                self,
+                "No Pages to Reprocess",
+                "There are no failed or low-confidence pages to reprocess."
+            )
+            return
+
+        # Count total pages to reprocess
+        total_pages = len(self.failed_pages)
+        for pages in self.low_confidence_pages.values():
+            total_pages += len(pages)
+
+        # Ask user for confirmation
+        reply = QMessageBox.question(
+            self,
+            "Reprocess Pages",
+            f"Found {total_pages} page(s) to reprocess.\n\n"
+            f"Failed pages: {len(self.failed_pages)}\n"
+            f"Low-confidence pages: {sum(len(p) for p in self.low_confidence_pages.values())}\n\n"
+            "Do you want to reprocess them?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.No:
+            return
+
+        self.log(f"Starting reprocessing of {total_pages} page(s)...")
+
+        # For now, just call the auto-reprocessing logic
+        # In future, this could create workers for specific pages only
+        if self.low_confidence_pages:
+            self.reprocess_low_confidence_pages()
+
+        if self.failed_pages:
+            self.log(f"Note: Failed pages reprocessing not yet implemented")
+            self.log(f"Failed pages: {len(self.failed_pages)}")
 
     def reprocess_low_confidence_pages(self):
         """Automatically reprocess pages with low confidence."""
