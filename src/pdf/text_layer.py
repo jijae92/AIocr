@@ -103,8 +103,12 @@ class SearchablePDFGenerator:
                     f"Image size=({img_width}, {img_height})"
                 )
 
+                # Sort blocks by reading order (top-to-bottom, left-to-right)
+                # This ensures PDF text extraction matches the TXT export order
+                sorted_blocks = sorted(text_blocks, key=lambda b: (b.bbox.y, b.bbox.x))
+
                 # Add text layer for each block
-                for block in text_blocks:
+                for block in sorted_blocks:
                     self._add_text_block(
                         page,
                         block,
