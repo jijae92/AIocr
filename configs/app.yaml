@@ -1,0 +1,193 @@
+# Application Configuration for Hybrid PDF OCR
+
+# General Settings
+app:
+  name: "Hybrid PDF OCR"
+  version: "0.1.0"
+  cache_dir: "${HOME}/.cache/hybrid-pdf-ocr"
+  log_dir: "${HOME}/.cache/hybrid-pdf-ocr/logs"
+  temp_dir: "/tmp/hybrid-pdf-ocr"
+
+# Device Configuration (macOS specific)
+device:
+  # Options: mps, cpu
+  preferred: "mps"
+  fallback: "cpu"
+  # Thread pool size for CPU operations
+  num_workers: 4
+  # Process pool size for parallel page processing
+  num_processes: 2
+
+# PDF Processing
+pdf:
+  # DPI for image conversion
+  dpi: 300
+  # Max pages per batch
+  max_pages_per_batch: 10
+  # Page range: null for all, or [start, end]
+  page_range: null
+  # Image format: PNG, JPEG
+  image_format: "PNG"
+
+# Routing Strategy
+routing:
+  # Strategy: docai_only, hybrid, donut_primary, trocr_primary
+  strategy: "hybrid"
+
+  # Confidence thresholds
+  thresholds:
+    # Use DocAI result if confidence > this
+    docai_accept: 0.85
+    # Use local model if DocAI confidence < this
+    docai_fallback: 0.70
+    # Trigger ensemble if both models' confidence in this range
+    ensemble_range: [0.70, 0.85]
+
+  # Ensemble method: max_confidence, voting, weighted_average
+  ensemble_method: "weighted_average"
+
+  # Weights for ensemble (docai, local_model)
+  ensemble_weights: [0.6, 0.4]
+
+# Document AI Configuration
+docai:
+  enabled: true
+  # Processor IDs from environment or here
+  processor_id_ocr: "${DOCAI_PROCESSOR_ID_OCR}"
+  processor_id_form: "${DOCAI_PROCESSOR_ID_FORM}"
+  project_id: "${GCP_PROJECT}"
+  location: "${GCP_LOCATION}"
+  # Timeout in seconds
+  timeout: 120
+  # Retry configuration
+  retry:
+    max_attempts: 3
+    initial_delay: 1.0
+    max_delay: 10.0
+    multiplier: 2.0
+
+# Donut Configuration
+donut:
+  enabled: false
+  model_name: "naver-clova-ix/donut-base"
+  # Path to LoRA adapter (if fine-tuned)
+  lora_adapter_path: "models/donut_lora"
+  use_lora: false
+  # Inference settings
+  max_length: 1024
+  batch_size: 1
+  # Quantization: none, int8, fp16
+  quantization: "fp16"
+
+# TrOCR Configuration
+trocr:
+  enabled: false
+  # Options: microsoft/trocr-base-handwritten, microsoft/trocr-large-printed
+  model_name: "microsoft/trocr-base-printed"
+  # ONNX model path (if converted)
+  onnx_model_path: "models/trocr_int8.onnx"
+  use_onnx: false
+  # Inference settings
+  max_length: 512
+  batch_size: 4
+
+# Table Transformer (TATR) Configuration
+tatr:
+  enabled: false
+  model_name: "microsoft/table-transformer-detection"
+  structure_model: "microsoft/table-transformer-structure-recognition"
+  confidence_threshold: 0.7
+  # Process tables separately
+  extract_tables: true
+
+# Pix2Tex (Math OCR) Configuration
+pix2tex:
+  enabled: false
+  model_name: "pix2tex/default"
+  # Detect math regions first
+  detect_math: true
+  confidence_threshold: 0.6
+
+# Preprocessing
+preprocessing:
+  # Auto-rotate based on orientation detection
+  auto_rotate: true
+  # Deskew (straighten) images
+  deskew: true
+  # Enhance contrast
+  enhance_contrast: true
+  # Denoise
+  denoise: false
+  # Binarization threshold (Otsu if null)
+  binarization_threshold: null
+
+# Postprocessing
+postprocessing:
+  # Normalize whitespace
+  normalize_whitespace: true
+  # Fix common OCR errors
+  fix_common_errors: true
+  # Merge text blocks by reading order
+  merge_blocks: true
+  # Preserve layout structure
+  preserve_layout: true
+
+# Export Options
+export:
+  # Output formats: txt, json, markdown, docx, searchable_pdf
+  formats: ["json", "txt", "searchable_pdf"]
+  # Include confidence scores in output
+  include_confidence: true
+  # Include bounding boxes
+  include_bboxes: true
+  # Searchable PDF: text layer opacity (0-255, 0=invisible)
+  pdf_text_opacity: 0
+
+# Cache Configuration
+cache:
+  enabled: true
+  # Cache strategy: content_hash, file_path
+  strategy: "content_hash"
+  # TTL in seconds (null for no expiration)
+  ttl: null
+  # Max cache size in MB
+  max_size_mb: 1024
+
+# Logging
+logging:
+  level: "INFO"
+  # Log format: json, text
+  format: "json"
+  # Audit trail for all operations
+  audit_enabled: true
+  # Filter PII from logs
+  filter_pii: true
+  # Rotation: size in MB
+  rotation_size_mb: 10
+  # Keep N backup files
+  backup_count: 5
+
+# Evaluation
+evaluation:
+  # Ground truth directory
+  ground_truth_dir: "tests/data/ground_truth"
+  # Metrics: cer, wer, accuracy
+  metrics: ["cer", "wer"]
+  # Table evaluation: TEDS, cell_f1
+  table_metrics: ["teds", "cell_f1"]
+  # Generate error analysis report
+  error_analysis: true
+  # Save predictions for review
+  save_predictions: true
+
+# GUI Settings
+gui:
+  # Window size
+  window_width: 1200
+  window_height: 800
+  # Theme: light, dark, auto
+  theme: "auto"
+  # Show preview pane
+  show_preview: true
+  # Auto-save settings
+  auto_save_settings: true
