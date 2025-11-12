@@ -139,18 +139,18 @@ class DropZoneWidget(QWidget):
             QLabel {
                 border: 2px dashed #aaa;
                 border-radius: 10px;
-                padding: 80px 60px;
+                padding: 30px 40px;
                 background-color: #f8f8f8;
-                font-size: 18px;
+                font-size: 14px;
                 font-weight: bold;
                 color: #666;
-                line-height: 1.6;
+                line-height: 1.8;
             }
         """)
         layout.addWidget(self.label)
 
-        self.setMinimumHeight(240)
-        self.setMaximumHeight(280)
+        self.setMinimumHeight(150)
+        self.setMaximumHeight(180)
 
     def dragEnterEvent(self, event):
         """Handle drag enter event."""
@@ -160,12 +160,12 @@ class DropZoneWidget(QWidget):
                 QLabel {
                     border: 2px dashed #4CAF50;
                     border-radius: 10px;
-                    padding: 80px 60px;
+                    padding: 30px 40px;
                     background-color: #e8f5e9;
-                    font-size: 18px;
+                    font-size: 14px;
                     font-weight: bold;
                     color: #2e7d32;
-                    line-height: 1.6;
+                    line-height: 1.8;
                 }
             """)
 
@@ -175,12 +175,12 @@ class DropZoneWidget(QWidget):
             QLabel {
                 border: 2px dashed #aaa;
                 border-radius: 10px;
-                padding: 80px 60px;
+                padding: 30px 40px;
                 background-color: #f8f8f8;
-                font-size: 18px;
+                font-size: 14px;
                 font-weight: bold;
                 color: #666;
-                line-height: 1.6;
+                line-height: 1.8;
             }
         """)
 
