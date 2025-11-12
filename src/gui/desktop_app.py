@@ -490,9 +490,10 @@ class HybridOCRApp(QMainWindow):
         options_group.addLayout(options_layout)
         layout.addWidget(options_group)
 
-        # Advanced options (collapsible, initially open for Performance settings)
+        # Advanced options (collapsible, initially collapsed)
         advanced_group = CollapsibleBox("Advanced Options")
-        advanced_group.update_button_text()
+        advanced_group.toggle_button.setChecked(False)
+        advanced_group.content_area.setVisible(False)
         advanced_layout = QFormLayout()
 
         # Preprocessing options
@@ -926,11 +927,8 @@ class HybridOCRApp(QMainWindow):
 
         layout.addWidget(progress_group)
 
-        # Performance Statistics section (collapsible, initially collapsed)
+        # Performance Statistics section (collapsible, initially open)
         stats_group = CollapsibleBox("Performance Statistics")
-        stats_group.toggle_button.setChecked(False)
-        stats_group.content_area.setVisible(False)
-        stats_group.update_button_text()
         stats_layout = QFormLayout()
 
         # Total processing time
