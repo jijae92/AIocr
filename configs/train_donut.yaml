@@ -1,0 +1,158 @@
+# Donut LoRA Fine-tuning Configuration
+
+# Model Configuration
+model:
+  base_model: "naver-clova-ix/donut-base"
+  # Image size
+  image_size: [1280, 960]
+  # Max sequence length
+  max_length: 1024
+
+# LoRA Configuration
+lora:
+  # Rank of LoRA matrices
+  r: 16
+  # Alpha parameter for LoRA scaling
+  lora_alpha: 32
+  # Dropout probability
+  lora_dropout: 0.1
+  # Target modules for LoRA
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "out_proj"
+  # Bias: none, all, lora_only
+  bias: "none"
+  # Task type
+  task_type: "SEQ_2_SEQ_LM"
+
+# Training Configuration
+training:
+  # Output directory
+  output_dir: "models/donut_lora"
+  # Number of training epochs
+  num_epochs: 10
+  # Batch size per device
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 4
+  # Gradient accumulation steps
+  gradient_accumulation_steps: 4
+  # Learning rate
+  learning_rate: 5.0e-5
+  # Weight decay
+  weight_decay: 0.01
+  # Warmup steps
+  warmup_steps: 500
+  # Max gradient norm for clipping
+  max_grad_norm: 1.0
+  # Optimizer: adamw_torch, adamw_hf, adafactor
+  optimizer: "adamw_torch"
+  # Learning rate scheduler
+  lr_scheduler_type: "cosine"
+  # Logging steps
+  logging_steps: 10
+  # Save steps
+  save_steps: 500
+  # Evaluation steps
+  eval_steps: 500
+  # Save total limit
+  save_total_limit: 3
+  # Load best model at end
+  load_best_model_at_end: true
+  # Metric for best model
+  metric_for_best_model: "cer"
+  # Greater is better
+  greater_is_better: false
+  # FP16 training
+  fp16: false
+  # BF16 training (for Apple Silicon)
+  bf16: false
+  # Gradient checkpointing
+  gradient_checkpointing: true
+  # Dataloader num workers
+  dataloader_num_workers: 2
+  # Remove unused columns
+  remove_unused_columns: false
+
+# Data Configuration
+data:
+  # Training data directory
+  train_dir: "data/train"
+  # Validation data directory
+  val_dir: "data/val"
+  # Test data directory
+  test_dir: "data/test"
+  # Data format: json, jsonl
+  data_format: "jsonl"
+  # Max samples for training (null for all)
+  max_train_samples: null
+  # Max samples for validation
+  max_val_samples: null
+  # Preprocessing workers
+  preprocessing_num_workers: 4
+  # Shuffle training data
+  shuffle: true
+  # Random seed
+  seed: 42
+
+# Task Configuration
+task:
+  # Task type: ocr, docvqa, document_parse
+  task_type: "ocr"
+  # Task prompt
+  task_prompt: "<s_ocr>"
+  # Special tokens
+  special_tokens:
+    - "<s_ocr>"
+    - "</s_ocr>"
+    - "<s_table>"
+    - "</s_table>"
+    - "<s_form>"
+    - "</s_form>"
+
+# Evaluation Configuration
+evaluation:
+  # Metrics to compute
+  metrics: ["cer", "wer", "accuracy"]
+  # Generate predictions
+  predict_with_generate: true
+  # Number of beams for beam search
+  num_beams: 1
+  # Max generation length
+  max_generation_length: 1024
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  # Patience (number of evaluations)
+  patience: 3
+  # Threshold for improvement
+  threshold: 0.001
+
+# Weights & Biases (optional)
+wandb:
+  enabled: false
+  project: "hybrid-pdf-ocr"
+  entity: null
+  name: "donut-lora-finetuning"
+  tags:
+    - "donut"
+    - "lora"
+    - "ocr"
+
+# Mixed Precision Training
+mixed_precision:
+  # Options: no, fp16, bf16
+  mode: "no"
+  # For Apple Silicon MPS
+  use_mps: true
+
+# Checkpoint Configuration
+checkpoint:
+  # Resume from checkpoint
+  resume_from_checkpoint: null
+  # Save optimizer state
+  save_optimizer: true
+  # Save RNG state
+  save_rng_state: true

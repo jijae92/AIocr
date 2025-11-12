@@ -1,313 +1,232 @@
-# AIocr - Intelligent OCR Routing and Ensemble System
+# Hybrid PDF OCR for macOS
 
-An intelligent OCR system that uses heuristic-based routing and ensemble methods to select and combine results from multiple OCR models for optimal accuracy.
-
-## Overview
-
-AIocr implements a sophisticated routing and ensemble system that automatically selects the best OCR model(s) based on document characteristics, content type, and confidence scores. The system supports multiple state-of-the-art OCR models and intelligently combines their results.
+A production-grade hybrid PDF OCR system combining Google Document AI, Donut, TrOCR, and Table Transformer (TATR) with a PyQt5 GUI for macOS.
 
 ## Features
 
-### 🎯 Intelligent Routing
-- **DocAI Priority**: Automatically uses Google Cloud Document AI for high-confidence, simple documents with supported languages
-- **Complex Layout Handling**: Falls back to Donut for multi-column layouts, complex structures, or low-confidence results
-- **Content-Specific Routing**:
-  - Tables → TATR (Table Transformer)
-  - Mathematical formulas → pix2tex
-  - Numeric content, dates, codes → TrOCR ONNX
+- **Multiple OCR Engines**:
+  - Google Cloud Document AI (primary, production-grade)
+  - Donut with LoRA fine-tuning support
+  - TrOCR with ONNX INT8 quantization
+  - Table Transformer (TATR) for table structure recognition
+  - Pix2Tex for mathematical formula OCR (placeholder)
 
-### 🔄 Ensemble Methods
-- **Weighted Voting**: Combines results based on model confidence and configured weights
-- **Consensus**: Uses blocks that appear in multiple model results
-- **Confidence Max**: Selects highest confidence result for each region
-- **Cross-Validation**: Validates numeric fields across multiple models
+- **Intelligent Routing**:
+  - Confidence-based routing between engines
+  - Ensemble methods for combining results
+  - Customizable thresholds and strategies
 
-### 📐 Layout Analysis
-- **Reading Order Restoration**: Spatial analysis to restore natural reading order
-- **Multi-Column Detection**: Automatically detects and handles multi-column layouts
-- **Table Structure Recovery**: Preserves table structure and cell relationships
-- **Source Labeling**: Maintains provenance and confidence metadata
+- **Advanced Processing**:
+  - Document preprocessing (deskew, contrast enhancement, denoising)
+  - Text normalization and layout preservation
+  - Searchable PDF generation with invisible text layer
 
-### ⚙️ Configuration-Driven
-- All thresholds, priorities, and timeouts externalized in `configs/app.yaml`
-- Easy tuning without code changes
-- Per-model and per-content-type settings
+- **macOS Optimized**:
+  - Apple Silicon (M1/M2) MPS acceleration
+  - Native PyQt5 GUI
+  - Optimized for macOS 13+
 
-## Architecture
+- **Production Features**:
+  - Content-addressable caching
+  - PII filtering in logs
+  - Audit trail logging (JSONL)
+  - Comprehensive evaluation metrics
 
-```
-AIocr/
-├── src/
-│   ├── data/               # Data structures
-│   │   ├── block_types.py  # Block type definitions
-│   │   └── ocr_result.py   # OCR result classes
-│   ├── models/             # OCR model wrappers
-│   │   ├── base_model.py   # Base interface
-│   │   ├── docai.py        # Google Cloud Document AI
-│   │   ├── donut.py        # Donut (NAVER)
-│   │   ├── trocr.py        # TrOCR (Microsoft)
-│   │   ├── tatr.py         # Table Transformer
-│   │   └── pix2tex.py      # Formula extraction
-│   ├── router/             # Routing logic
-│   │   └── heuristics.py   # Heuristic-based router
-│   └── utils/              # Utilities
-│       └── layout_merge.py # Layout and merge utilities
-├── configs/
-│   └── app.yaml            # Configuration
-├── tests/                  # Unit tests
-├── requirements.txt        # Dependencies
-└── setup.py               # Package setup
-```
+## Requirements
+
+- macOS 13+ (Apple Silicon recommended)
+- Python 3.12+
+- Google Cloud Platform account (for Document AI)
 
 ## Installation
 
+### 1. Bootstrap Script
+
 ```bash
-# Clone the repository
-git clone https://github.com/jijae92/AIocr.git
-cd AIocr
+chmod +x scripts/bootstrap_mac.sh
+./scripts/bootstrap_mac.sh
+```
+
+### 2. Manual Installation
+
+```bash
+# Create virtual environment
+python3.12 -m venv venv
+source venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
-
-# Or install as package
-pip install -e .
-
-# For GPU support
-pip install -e ".[gpu]"
-
-# For development
 pip install -e ".[dev]"
+
+# For table support
+pip install -e ".[table]"
+
+# For math OCR support
+pip install -e ".[math]"
 ```
 
-## Quick Start
+### 3. Google Cloud Setup
 
-### Basic Usage
+1. Create a GCP project
+2. Enable Document AI API
+3. Create Document AI processors (OCR and Form Parser)
+4. Download service account JSON key
+5. Set environment variables:
 
-```python
-from src.router.heuristics import HeuristicRouter, DocumentCharacteristics
-from src.data.block_types import LayoutComplexity, ContentPattern
-
-# Initialize router
-router = HeuristicRouter()
-
-# Analyze document and get routing decision
-characteristics = DocumentCharacteristics(
-    page_count=1,
-    average_confidence=0.82,
-    layout_complexity=LayoutComplexity.SIMPLE,
-    has_tables=True,
-    table_count=2,
-    has_formulas=False,
-    has_multi_column=False,
-    detected_language="en",
-    content_patterns={ContentPattern.NUMERIC},
-    numeric_content_ratio=0.4,
-    image_quality_score=0.9
-)
-
-# Get routing decision
-decision = router.route(characteristics)
-print(f"Primary model: {decision.primary_model}")
-print(f"Reason: {decision.reason}")
-print(f"Use ensemble: {decision.use_ensemble}")
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+export GCP_PROJECT="your-project-id"
+export GCP_LOCATION="us"
+export DOCAI_PROCESSOR_ID_OCR="your-ocr-processor-id"
+export DOCAI_PROCESSOR_ID_FORM="your-form-processor-id"
 ```
 
-### Merging Results
+## Usage
+
+### GUI Application
+
+```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Run GUI
+python src/gui/desktop_app.py
+```
+
+### Python API
 
 ```python
-from src.utils.layout_merge import LayoutMerger
-from src.data.ocr_result import OCRResult
+from pathlib import Path
+from connectors.docai_client import DocumentAIClient
+from preproc.pdf_loader import PDFLoader
+from postproc.exporters import Exporter
 
-# Initialize merger
-merger = LayoutMerger()
+# Initialize
+client = DocumentAIClient()
+loader = PDFLoader(dpi=300)
 
-# Restore reading order
-ordered_page = merger.restore_reading_order(page_result)
+# Load PDF
+pages = loader.load_pages(Path("document.pdf"))
 
-# Merge multiple model results
-ensemble_result = merger.merge_results(
-    results=[docai_result, donut_result, trocr_result],
-    model_names=["docai", "donut", "trocr"],
-    strategy="weighted_voting"
+# Process with Document AI
+result = client.process_and_extract(Path("document.pdf"))
+
+# Export results
+Exporter.export_all(
+    text=result['text'],
+    data=result,
+    base_path=Path("output"),
+    formats=['txt', 'json', 'searchable_pdf']
 )
-
-# Access merged result
-print(f"Text: {ensemble_result.primary_result.text}")
-print(f"Confidence: {ensemble_result.primary_result.average_confidence}")
-print(f"Conflicts: {len(ensemble_result.conflicts)}")
 ```
 
 ## Configuration
 
-Key configuration options in `configs/app.yaml`:
+Edit `configs/app.yaml` to customize:
 
-### Thresholds
-```yaml
-thresholds:
-  docai_confidence: 0.85      # DocAI acceptance threshold
-  low_confidence: 0.5         # Triggers ensemble mode
-  high_confidence: 0.95       # Accept without validation
-  simple_table_cells: 50      # Max cells for "simple" table
-  numeric_content_ratio: 0.7  # Threshold for numeric routing
+- Routing strategy and thresholds
+- Engine settings (Donut, TrOCR, TATR)
+- Preprocessing options
+- Export formats
+- Cache configuration
+
+## Project Structure
+
 ```
-
-### Model Weights
-```yaml
-ensemble:
-  weights:
-    docai: 1.5
-    donut: 1.2
-    trocr: 1.0
-    tatr: 1.3
-    pix2tex: 1.1
+hybrid-pdf-ocr-macgui/
+├── configs/               # Configuration files
+│   ├── app.yaml          # Application settings
+│   └── train_donut.yaml  # Donut LoRA training config
+├── src/
+│   ├── gui/              # PyQt5 GUI application
+│   ├── connectors/       # Document AI client
+│   ├── engines/          # OCR engines (Donut, TrOCR, TATR)
+│   ├── router/           # Routing and ensemble logic
+│   ├── preproc/          # PDF loading and preprocessing
+│   ├── postproc/         # Text normalization and export
+│   ├── pdf/              # Searchable PDF generation
+│   ├── cache/            # Caching system
+│   ├── eval/             # Evaluation and benchmarking
+│   └── util/             # Utilities (logging, device, coords)
+├── models/               # Model storage
+├── tests/                # Unit tests
+└── scripts/              # Setup scripts
 ```
-
-### Content Routing
-```yaml
-routing:
-  content_routing:
-    tables:
-      primary: tatr
-      fallback: docai
-    formulas:
-      primary: pix2tex
-    numeric:
-      primary: trocr
-      validation: docai
-```
-
-## Routing Decision Logic
-
-### 1. DocAI Priority Path
-Used when:
-- Confidence ≥ 0.85
-- Simple to moderate layout
-- Supported language
-- Table count ≤ threshold
-
-### 2. Donut Reinterpretation
-Used when:
-- Confidence < 0.85
-- Complex/multi-column layout
-- High table count (> 5)
-
-### 3. TrOCR Cross-Validation
-Used for:
-- Numeric content (ratio > 0.7)
-- Date/time fields
-- Code/ID patterns
-- Validation of critical fields
-
-### 4. Specialized Models
-- **TATR**: Table structure recovery
-- **pix2tex**: Mathematical formula extraction
-
-## Data Structures
-
-### Block
-```python
-@dataclass
-class Block:
-    text: str
-    block_type: BlockType
-    confidence: float
-    bbox: BoundingBox
-    language: Optional[str]
-    model_source: Optional[str]
-    content_pattern: Optional[ContentPattern]
-    reading_order: Optional[int]
-```
-
-### OCRResult
-```python
-@dataclass
-class OCRResult:
-    pages: List[PageResult]
-    doc_id: Optional[str]
-    processing_time: Optional[float]
-    metadata: Dict[str, Any]
-```
-
-### EnsembleResult
-```python
-@dataclass
-class EnsembleResult:
-    primary_result: OCRResult
-    alternative_results: List[OCRResult]
-    model_sources: Dict[str, str]
-    confidence_map: Dict[str, float]
-    conflicts: List[Dict[str, Any]]
-```
-
-## Model Support
-
-| Model | Purpose | Strengths |
-|-------|---------|-----------|
-| **DocAI** | General OCR | Multi-language, high accuracy, tables |
-| **Donut** | Complex layouts | Multi-column, document understanding |
-| **TrOCR** | Text recognition | Numeric, dates, ONNX support |
-| **TATR** | Table extraction | Structure recovery, cell detection |
-| **pix2tex** | Formula extraction | LaTeX generation, scientific docs |
 
 ## Development
 
 ### Running Tests
+
 ```bash
 pytest tests/
 ```
 
 ### Code Formatting
+
 ```bash
-black src/
-flake8 src/
+black src/ tests/
+ruff check src/ tests/
 ```
 
 ### Type Checking
+
 ```bash
 mypy src/
 ```
 
-## Roadmap
+## Evaluation
 
-- [ ] Implement actual model integrations (currently stubs)
-- [ ] Add neural reading order detection
-- [ ] Implement confidence calibration
-- [ ] Add support for more languages
-- [ ] Performance optimization
-- [ ] Web API interface
-- [ ] CLI tool
-- [ ] Benchmarking suite
+```python
+from eval.bench import OCREvaluator
 
-## Contributing
+evaluator = OCREvaluator()
+metrics = evaluator.evaluate(predicted_text, ground_truth)
 
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+print(f"CER: {metrics['cer']:.3f}")
+print(f"WER: {metrics['wer']:.3f}")
+print(f"Accuracy: {metrics['accuracy']:.3f}")
+```
+
+## Fine-tuning Donut
+
+See `configs/train_donut.yaml` for LoRA fine-tuning configuration.
+
+```python
+# Training script (to be implemented)
+python scripts/train_donut.py \
+    --config configs/train_donut.yaml \
+    --data-dir data/train
+```
+
+## Troubleshooting
+
+### MPS Not Available
+
+If MPS is not available, the system will fall back to CPU. Ensure you're running on Apple Silicon with macOS 13+.
+
+### Document AI Errors
+
+- Verify your service account key has Document AI permissions
+- Check processor IDs are correct
+- Ensure Document AI API is enabled in your GCP project
+
+### Memory Issues
+
+For large PDFs:
+- Reduce `max_pages_per_batch` in `configs/app.yaml`
+- Enable cache to avoid reprocessing
+- Process pages individually
 
 ## License
 
-[License details to be added]
+MIT
 
-## Citation
+## Contributing
 
-If you use this project in your research, please cite:
-
-```bibtex
-@software{aiocr2024,
-  title={AIocr: Intelligent OCR Routing and Ensemble System},
-  author={AIocr Team},
-  year={2024},
-  url={https://github.com/jijae92/AIocr}
-}
-```
+Contributions welcome! Please open an issue or PR.
 
 ## Acknowledgments
 
 - Google Cloud Document AI
-- NAVER Clova Donut
+- Naver Clova Donut
 - Microsoft TrOCR
-- Table Transformer (TATR)
-- pix2tex project
+- Microsoft Table Transformer

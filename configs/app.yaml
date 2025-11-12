@@ -1,4 +1,33 @@
-# OCR Routing and Ensemble Configuration
+# Application Configuration for Hybrid PDF OCR with Intelligent Routing
+
+# General Settings
+app:
+  name: "Hybrid PDF OCR"
+  version: "0.1.0"
+  cache_dir: "${HOME}/.cache/hybrid-pdf-ocr"
+  log_dir: "${HOME}/.cache/hybrid-pdf-ocr/logs"
+  temp_dir: "/tmp/hybrid-pdf-ocr"
+
+# Device Configuration (macOS specific)
+device:
+  # Options: mps, cpu
+  preferred: "mps"
+  fallback: "cpu"
+  # Thread pool size for CPU operations
+  num_workers: 4
+  # Process pool size for parallel page processing
+  num_processes: 2
+
+# PDF Processing
+pdf:
+  # DPI for image conversion
+  dpi: 300
+  # Max pages per batch
+  max_pages_per_batch: 10
+  # Page range: null for all, or [start, end]
+  page_range: null
+  # Image format: PNG, JPEG
+  image_format: "PNG"
 
 # Model Priority Order (highest to lowest)
 model_priority:
@@ -70,7 +99,11 @@ models:
     # - Language is supported
     # - Layout is simple to moderate
     enabled: true
-    timeout_seconds: 30
+    processor_id_ocr: "${DOCAI_PROCESSOR_ID_OCR}"
+    processor_id_form: "${DOCAI_PROCESSOR_ID_FORM}"
+    project_id: "${GCP_PROJECT}"
+    location: "${GCP_LOCATION}"
+    timeout_seconds: 120
     max_pages_per_request: 50
     retry_attempts: 3
 
@@ -80,9 +113,14 @@ models:
     # - Complex multi-column layouts
     # - Many tables present
     enabled: true
+    model_name: "naver-clova-ix/donut-base"
+    lora_adapter_path: "models/donut_lora"
+    use_lora: false
     timeout_seconds: 60
-    batch_size: 4
+    batch_size: 1
     max_image_size: 2560
+    quantization: "fp16"
+    max_length: 1024
 
   trocr:
     # TrOCR ONNX is used for:
@@ -91,6 +129,8 @@ models:
     # - Date/time parsing
     # - Cross-validation of critical fields
     enabled: true
+    model_name: "microsoft/trocr-base-printed"
+    onnx_model_path: "models/trocr_int8.onnx"
     timeout_seconds: 20
     use_onnx: true
     onnx_providers:
@@ -101,29 +141,55 @@ models:
       - date
       - code
       - alphanumeric
+    max_length: 512
+    batch_size: 4
 
   tatr:
     # TATR (Table Transformer) is used for:
     # - Table structure recovery
     # - Complex table parsing
     enabled: true
+    model_name: "microsoft/table-transformer-detection"
+    structure_model: "microsoft/table-transformer-structure-recognition"
     timeout_seconds: 45
-    min_table_confidence: 0.6
+    min_table_confidence: 0.7
     cell_detection_threshold: 0.5
+    extract_tables: true
 
   pix2tex:
     # pix2tex is used for:
     # - Mathematical formula extraction
     # - LaTeX generation
     enabled: true
+    model_name: "pix2tex/default"
     timeout_seconds: 30
     min_formula_size: 20  # Minimum pixel width/height
     temperature: 0.1  # Sampling temperature
+    detect_math: true
+    confidence_threshold: 0.6
 
 # Routing Heuristics
 routing:
   # Strategy for model selection
   strategy: adaptive  # Options: adaptive, fixed, confidence_based
+
+  # DocAI confidence threshold (when to accept DocAI result)
+  docai_conf_threshold: 0.88
+
+  # Engine-specific timeouts (milliseconds)
+  donut_timeout_ms: 3000
+  trocr_timeout_ms: 2000
+  tatr_timeout_ms: 4500
+
+  # TrOCR pattern-based substitution (regex patterns for replacement)
+  trocr_replace_patterns:
+    - "\\d{3}-\\d{2}-\\d{5}"  # SSN-like patterns
+    - "\\d{4}-\\d{2}-\\d{2}"  # Date patterns (YYYY-MM-DD)
+    - "\\d{2}/\\d{2}/\\d{4}"  # Date patterns (MM/DD/YYYY)
+    - "[A-Z]{2}\\d{6}"        # Code patterns (e.g., AB123456)
+
+  # Prefer table-specific engine for table content
+  prefer_table_engine: true
 
   # Parallel model execution
   parallel_execution: false
@@ -243,12 +309,25 @@ layout_merge:
     block_types: true
     timestamps: true
 
-# Performance Configuration
-performance:
-  # Cache OCR results
-  enable_cache: true
-  cache_ttl_seconds: 3600
+# Preprocessing (Simplified Configuration)
+preproc:
+  # DPI for image conversion
+  dpi: 300
+  # Enable image enhancement (contrast, denoise, deskew)
+  enhance: true
 
+# Preprocessing (Detailed Configuration)
+preprocessing:
+  # Auto-rotate based on orientation detection
+  auto_rotate: true
+  # Deskew (straighten) images
+  deskew: true
+  # Enhance contrast
+  enhance_contrast: true
+  # Denoise
+  denoise: false
+  # Binarization threshold (Otsu if null)
+  binarization_threshold: null
   # Image preprocessing
   preprocessing:
     # Resize large images
@@ -262,12 +341,57 @@ performance:
     # DPI normalization
     target_dpi: 300
 
+# Postprocessing
+postprocessing:
+  # Normalize whitespace
+  normalize_whitespace: true
+  # Fix common OCR errors
+  fix_common_errors: true
+  # Merge text blocks by reading order
+  merge_blocks: true
+  # Preserve layout structure
+  preserve_layout: true
+
+# Export Options
+export:
+  # Output formats: txt, json, markdown, docx, searchable_pdf
+  formats: ["json", "txt", "searchable_pdf"]
+  # Include confidence scores in output
+  include_confidence: true
+  # Include bounding boxes
+  include_bboxes: true
+  # Searchable PDF: text layer opacity (0-255, 0=invisible)
+  pdf_text_opacity: 0
+
+# Runtime Configuration (Simplified)
+runtime:
+  # Maximum worker threads for parallel processing
+  max_workers: 4
+  # Device: mps (Apple Silicon), cpu
+  device: "mps"
+
+# Performance Configuration
+performance:
+  # Cache OCR results
+  enable_cache: true
+  cache_ttl_seconds: 3600
+
   # Memory limits
   max_memory_mb: 8192
 
   # GPU configuration
   use_gpu: true
   gpu_memory_fraction: 0.8
+
+# Cache Configuration
+cache:
+  enabled: true
+  # Cache strategy: content_hash, file_path
+  strategy: "content_hash"
+  # TTL in seconds (null for no expiration)
+  ttl: 3600
+  # Max cache size in MB
+  max_size_mb: 1024
 
 # Logging Configuration
 logging:
@@ -287,8 +411,14 @@ logging:
 
   # Log file rotation
   rotation:
-    max_size_mb: 100
+    max_size_mb: 10
     backup_count: 5
+
+  # Audit trail
+  audit_enabled: true
+
+  # Filter PII from logs
+  filter_pii: true
 
 # Quality Assurance
 quality:
@@ -334,3 +464,75 @@ error_handling:
 
   # Error notification
   notify_on_error: false
+
+# Evaluation & Benchmarking
+evaluation:
+  # Ground truth directory
+  ground_truth_dir: "tests/data/ground_truth"
+
+  # Input data directory
+  test_data_dir: "tests/data"
+
+  # Output reports directory
+  reports_dir: "reports"
+
+  # OCR Metrics: Character Error Rate, Word Error Rate, Accuracy
+  metrics:
+    - cer
+    - wer
+    - accuracy
+
+  # Table evaluation: TEDS (Tree Edit Distance based Similarity), Cell F1
+  table_metrics:
+    - teds
+    - cell_f1
+
+  # Performance metrics
+  performance_metrics:
+    - p95_latency      # 95th percentile latency
+    - avg_latency      # Average latency
+    - engine_hit_rate  # Engine hit rate (which engine was used)
+    - throughput       # Pages per second
+
+  # Error analysis configuration
+  error_analysis:
+    enabled: true
+    # Generate page thumbnails for failed pages
+    generate_thumbnails: true
+    # Thumbnail size (pixels)
+    thumbnail_size: 200
+    # Show prediction vs ground truth diff
+    show_diff: true
+    # Include routing decision reason in error report
+    include_routing_reason: true
+    # Maximum errors to display
+    max_errors_displayed: 50
+
+  # Save predictions for review
+  save_predictions: true
+
+  # Output formats
+  output_formats:
+    - csv    # Metrics in CSV format
+    - md     # Markdown report
+    - json   # Detailed JSON results
+
+  # Comparison mode (compare multiple models/configs)
+  comparison:
+    enabled: false
+    baseline_model: "docai"
+    models_to_compare:
+      - donut
+      - trocr
+
+# GUI Settings
+gui:
+  # Window size
+  window_width: 1200
+  window_height: 800
+  # Theme: light, dark, auto
+  theme: "auto"
+  # Show preview pane
+  show_preview: true
+  # Auto-save settings
+  auto_save_settings: true
