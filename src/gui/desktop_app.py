@@ -6,10 +6,18 @@ engine selection, threshold settings, progress tracking, result preview,
 export options, and error view with thumbnails.
 """
 
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Ensure the top-level `src` directory is on sys.path when this file
+# is executed directly (e.g., `python src/gui/desktop_app.py`).
+CURRENT_FILE = Path(__file__).resolve()
+SRC_DIR = CURRENT_FILE.parents[1].parent  # .../src
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from PyQt5.QtCore import Qt, QThreadPool, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QTextCharFormat, QColor, QFont
@@ -48,6 +56,57 @@ from util.logging import get_logger, setup_logging
 from util.config import load_config
 
 logger = get_logger(__name__)
+
+_instance_lock_handle = None
+
+# Marker file to detect recent app exits and avoid
+# rapid macOS relaunch loops from a bundled .app.
+_recent_exit_marker = Path.home() / ".hybrid_ocr_recent_exit"
+_recent_exit_timeout_seconds = 5
+
+
+def acquire_single_instance_lock() -> bool:
+    """
+    Acquire a cross-platform single-instance lock.
+
+    This prevents multiple GUI processes from running simultaneously,
+    which can manifest as windows opening repeatedly on some systems
+    or with certain launchers / bundlers.
+    """
+    global _instance_lock_handle
+
+    lock_file = Path.home() / ".hybrid_ocr_gui.lock"
+    try:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_file.open("w")
+    except OSError:
+        # If we cannot create the lock file, do not block startup
+        return True
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                handle.close()
+                return False
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                handle.close()
+                return False
+    except Exception:
+        # On any unexpected error, fall back to allowing startup
+        handle.close()
+        return True
+
+    _instance_lock_handle = handle
+    return True
 
 
 class CollapsibleBox(QWidget):
@@ -137,13 +196,13 @@ class DropZoneWidget(QWidget):
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setStyleSheet("""
             QLabel {
-                border: 2px dashed #666;
+                border: 2px dashed #555;
                 border-radius: 10px;
                 padding: 30px 40px;
-                background-color: #c0c0c0;
+                background-color: #2b2b2b;
                 font-size: 14px;
                 font-weight: bold;
-                color: #333;
+                color: white;
                 line-height: 1.8;
             }
         """)
@@ -173,13 +232,13 @@ class DropZoneWidget(QWidget):
         """Handle drag leave event."""
         self.label.setStyleSheet("""
             QLabel {
-                border: 2px dashed #666;
+                border: 2px dashed #555;
                 border-radius: 10px;
                 padding: 30px 40px;
-                background-color: #c0c0c0;
+                background-color: #2b2b2b;
                 font-size: 14px;
                 font-weight: bold;
-                color: #333;
+                color: white;
                 line-height: 1.8;
             }
         """)
@@ -198,13 +257,13 @@ class DropZoneWidget(QWidget):
         # Reset style
         self.label.setStyleSheet("""
             QLabel {
-                border: 2px dashed #666;
+                border: 2px dashed #555;
                 border-radius: 10px;
                 padding: 30px 40px;
-                background-color: #c0c0c0;
+                background-color: #2b2b2b;
                 font-size: 14px;
                 font-weight: bold;
-                color: #333;
+                color: white;
                 line-height: 1.8;
             }
         """)
@@ -395,6 +454,7 @@ class HybridOCRApp(QMainWindow):
             }
             QTableWidget::item {
                 padding: 5px;
+                color: white;
             }
             QTableWidget::item:selected {
                 background-color: #4CAF50;
@@ -2121,11 +2181,50 @@ class HybridOCRApp(QMainWindow):
 
         # Clean up thread pool
         self.thread_pool.waitForDone()
+
+        # Record a "recent exit" marker so that if the macOS
+        # .app bundle or launcher tries to immediately relaunch
+        # the process, the next startup can detect it and exit
+        # without opening a new window.
+        try:
+            _recent_exit_marker.parent.mkdir(parents=True, exist_ok=True)
+            _recent_exit_marker.write_text(str(time.time()))
+        except Exception:
+            # If writing the marker fails, we still proceed with normal quit.
+            pass
+
+        # Accept the close event and explicitly quit the application.
+        # This helps ensure that when the main window is closed from
+        # a bundled .app, the Qt event loop stops and the process
+        # terminates instead of immediately re-opening a new window.
         event.accept()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
 
 def main():
     """Main entry point."""
+    # If the app was closed very recently, do not allow an immediate
+    # relaunch. On some macOS setups, a bundled .app (or associated
+    # launcher) can try to restart the process when it exits, which
+    # manifests as the window reappearing right after the user quits.
+    try:
+        if _recent_exit_marker.exists():
+            mtime = _recent_exit_marker.stat().st_mtime
+            if time.time() - mtime < _recent_exit_timeout_seconds:
+                # Treat this as an undesired automatic relaunch and exit quietly.
+                return
+    except Exception:
+        # If anything goes wrong checking the marker, continue startup normally.
+        pass
+
+    # Prevent multiple GUI instances (helps avoid infinite-window behavior)
+    if not acquire_single_instance_lock():
+        # Another instance is already running – avoid opening another window
+        # (In a bundled .app there is usually no visible console, so we just exit quietly.)
+        return
+
     # Setup logging
     setup_logging(log_level='INFO')
 
@@ -2133,6 +2232,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Hybrid PDF OCR")
     app.setStyle("Fusion")  # Modern cross-platform style
+    # Ensure the app quits when the last window is closed
+    app.setQuitOnLastWindowClosed(True)
 
     # Create and show main window
     config_path = Path("configs/app.yaml") if Path("configs/app.yaml").exists() else None

@@ -27,6 +27,7 @@ from preproc.pdf_loader import PDFLoader
 from postproc.text_norm import TextNormalizer
 from postproc.spell_checker import get_spell_corrector
 from util.logging import get_logger
+from util.config import load_config  # Import config to ensure .env is loaded
 
 logger = get_logger(__name__)
 
@@ -112,7 +113,8 @@ class PDFOCRWorker(QRunnable):
         self.normalizer = TextNormalizer()
         self.spell_corrector = get_spell_corrector()
         self.pdf_generator = SearchablePDFGenerator(
-            text_opacity=config.get('export', {}).get('pdf_text_opacity', 0)
+            text_opacity=config.get('export', {}).get('pdf_text_opacity', 0),
+            use_cjk_font=True  # Enable CJK font for Korean text support
         )
 
         # Initialize DocAI client (only OCR engine used)
@@ -223,10 +225,30 @@ class PDFOCRWorker(QRunnable):
         self.is_cancelled = True
 
     def _load_pdf_pages(self) -> List:
-        """Load PDF pages with optional page range filtering."""
-        page_images = self.pdf_loader.load_pages(
+        """Load PDF pages with optional page range filtering (parallel loading)."""
+        # Get page count for progress reporting
+        page_count = self.pdf_loader.get_page_count(self.file_path)
+
+        # Determine actual page range
+        if self.page_range:
+            start, end = self.page_range
+            total_pages = end - start + 1
+        else:
+            total_pages = page_count
+
+        # Progress callback for parallel loading
+        def progress_callback(completed: int, total: int):
+            if not self.is_cancelled:
+                self.signals.log_message.emit(
+                    f"  Loading PDF pages: {completed}/{total}"
+                )
+
+        # Use parallel loading for faster performance
+        page_images = self.pdf_loader.load_pages_parallel(
             self.file_path,
-            page_range=self.page_range
+            page_range=self.page_range,
+            max_workers=4,  # Use 4 threads for parallel loading
+            progress_callback=progress_callback
         )
 
         # Apply preprocessing
@@ -265,77 +287,62 @@ class PDFOCRWorker(QRunnable):
 
     def _process_with_docai_all_processors(self, page_image, page_num: int) -> PageResult:
         """
-        Process with DocAI processors, adaptively using more processors if tables detected.
+        Process with DocAI OCR processor (only one processor for best quality).
 
         Strategy:
-        1. Start with OCR processor
-        2. If tables detected, add Form/Layout parsers for better table extraction
+        - Use only OCR processor for clean, accurate text extraction
+        - Avoid processor mixing which can cause quality degradation
+        - Keep it simple and reliable
 
         Args:
             page_image: PageImage object
             page_num: Page number
 
         Returns:
-            PageResult with merged blocks from all processors
+            PageResult with OCR blocks
         """
-        self.signals.log_message.emit(f"Processing page {page_num} with DocAI...")
+        # Ensure DocAI client and OCR processor are available
+        if not self.docai_client:
+            raise RuntimeError(
+                "DocAI client not initialized. Please check your Google Cloud "
+                "credentials and DOCAI_* environment variables."
+            )
+
+        if not getattr(self.docai_client, "processor_id_ocr", None):
+            raise RuntimeError(
+                "DocAI OCR processor ID not configured. Set DOCAI_PROCESSOR_ID_OCR "
+                "in your environment or configuration."
+            )
+
+        self.signals.log_message.emit(f"Processing page {page_num} with DocAI OCR...")
 
         all_blocks = []
         processors_used = []
-        has_tables = False
-        ocr_result = None
 
-        # Always try OCR Processor first
-        if self.docai_client.processor_id_ocr:
-            try:
-                self.signals.log_message.emit(f"  → OCR Processor...")
+        # Use OCR Processor only - most reliable for general documents
+        try:
+            self.signals.log_message.emit("  → OCR Processor...")
+            ocr_blocks, ocr_tables = self._process_with_docai_and_detect_tables(
+                page_image, page_num, 'ocr'
+            )
 
-                # Process with DocAI and get both blocks and tables
-                ocr_blocks, ocr_tables = self._process_with_docai_and_detect_tables(
-                    page_image, page_num, 'ocr'
+            if ocr_blocks:
+                all_blocks.extend(ocr_blocks)
+                processors_used.append('OCR')
+
+            if ocr_tables:
+                self.signals.log_message.emit(
+                    f"  ✓ Detected {len(ocr_tables)} table(s)"
                 )
 
-                if ocr_blocks:
-                    all_blocks.extend(ocr_blocks)
-                    processors_used.append('OCR')
+        except Exception as e:
+            logger.warning(f"OCR processor failed: {e}")
 
-                # Check if tables were detected
-                if ocr_tables:
-                    has_tables = True
-                    self.signals.log_message.emit(
-                        f"  ✓ Detected {len(ocr_tables)} table(s), using Form/Layout parsers..."
-                    )
-
-            except Exception as e:
-                logger.warning(f"OCR processor failed: {e}")
-
-        # If tables detected, use Form Parser for better table extraction
-        if has_tables and self.docai_client.processor_id_form:
-            try:
-                self.signals.log_message.emit(f"  → Form Parser (for tables)...")
-                form_blocks = self._process_with_docai(page_image, page_num, 'form')
-                if form_blocks:
-                    all_blocks.extend(form_blocks)
-                    processors_used.append('Form')
-            except Exception as e:
-                logger.warning(f"Form parser failed: {e}")
-
-        # If tables detected, use Layout Parser for better structure understanding
-        if has_tables and self.docai_client.processor_id_layout:
-            try:
-                self.signals.log_message.emit(f"  → Layout Parser (for tables)...")
-                layout_blocks = self._process_with_docai(page_image, page_num, 'layout')
-                if layout_blocks:
-                    all_blocks.extend(layout_blocks)
-                    processors_used.append('Layout')
-            except Exception as e:
-                logger.warning(f"Layout parser failed: {e}")
-
-        # Deduplicate and merge blocks
+        # Use merged blocks (deduplication still applied for safety)
         merged_blocks = self._merge_docai_blocks(all_blocks)
 
         self.signals.log_message.emit(
-            f"DocAI processors used: {', '.join(processors_used)} → {len(merged_blocks)} blocks"
+            f"  ✓ Processors used: {', '.join(processors_used)} → {len(merged_blocks)} blocks"
         )
 
         return PageResult(
@@ -352,24 +359,60 @@ class PDFOCRWorker(QRunnable):
         Strategy:
         - Keep blocks with highest confidence for overlapping regions
         - Preserve unique blocks from each processor
+        - Use text-based deduplication with IoU check for similar positions
         """
         if not blocks:
             return []
 
-        # Simple approach: deduplicate by text and keep highest confidence
-        unique_blocks = {}
+        def calculate_iou(bbox1, bbox2) -> float:
+            """Calculate Intersection over Union for two bounding boxes."""
+            x1 = max(bbox1.x, bbox2.x)
+            y1 = max(bbox1.y, bbox2.y)
+            x2 = min(bbox1.x + bbox1.width, bbox2.x + bbox2.width)
+            y2 = min(bbox1.y + bbox1.height, bbox2.y + bbox2.height)
+
+            if x2 < x1 or y2 < y1:
+                return 0.0
+
+            intersection = (x2 - x1) * (y2 - y1)
+            area1 = bbox1.width * bbox1.height
+            area2 = bbox2.width * bbox2.height
+            union = area1 + area2 - intersection
+
+            return intersection / union if union > 0 else 0.0
+
+        # Deduplicate blocks
+        unique_blocks = []
 
         for block in blocks:
-            key = (block.text.strip(), tuple(block.bbox.__dict__.values()))
+            # Skip empty text
+            if not block.text or not block.text.strip():
+                continue
 
-            if key not in unique_blocks:
-                unique_blocks[key] = block
-            else:
-                # Keep block with higher confidence
-                if block.confidence > unique_blocks[key].confidence:
-                    unique_blocks[key] = block
+            is_duplicate = False
+            text_stripped = block.text.strip()
 
-        return list(unique_blocks.values())
+            # Check if this block is a duplicate
+            for i, existing in enumerate(unique_blocks):
+                existing_text = existing.text.strip()
+
+                # Same text check
+                if text_stripped == existing_text:
+                    # Calculate position overlap
+                    iou = calculate_iou(block.bbox, existing.bbox)
+
+                    # If highly overlapping (IoU > 0.5), it's a duplicate
+                    if iou > 0.5:
+                        is_duplicate = True
+                        # Keep block with higher confidence
+                        if block.confidence > existing.confidence:
+                            unique_blocks[i] = block
+                        break
+
+            if not is_duplicate:
+                unique_blocks.append(block)
+
+        return unique_blocks
 
 
     def _postprocess_text(self, text: str) -> str:
@@ -752,11 +795,13 @@ class PDFOCRWorker(QRunnable):
                 # Convert bbox list to BoundingBox object
                 bbox_norm = block_data.get('bbox_norm', [0, 0, 0, 0])
                 if isinstance(bbox_norm, list) and len(bbox_norm) >= 4:
+                    # DocAI bbox_norm: [x, y, w, h] in 0..1 relative to image
+                    img_w, img_h = page_image.width, page_image.height
                     bbox = BoundingBox(
-                        x=bbox_norm[0],
-                        y=bbox_norm[1],
-                        width=bbox_norm[2],
-                        height=bbox_norm[3],
+                        x=bbox_norm[0] * img_w,
+                        y=bbox_norm[1] * img_h,
+                        width=bbox_norm[2] * img_w,
+                        height=bbox_norm[3] * img_h,
                         page=page_num - 1
                     )
                 else:
@@ -773,10 +818,14 @@ class PDFOCRWorker(QRunnable):
 
                 block = Block(
                     text=block_data.get('text', ''),
-                    bbox=bbox,
                     confidence=block_data.get('conf', 1.0),
                     block_type=block_type,
-                    language=block_data.get('language')
+                    bbox=bbox,
+                    language=block_data.get('language'),
+                    metadata={
+                        "bbox_norm": bbox_norm,
+                        "coord_type": "docai_normalized",
+                    },
                 )
                 blocks.append(block)
 
@@ -827,11 +876,13 @@ class PDFOCRWorker(QRunnable):
                 # Convert bbox list to BoundingBox object
                 bbox_norm = block_data.get('bbox_norm', [0, 0, 0, 0])
                 if isinstance(bbox_norm, list) and len(bbox_norm) >= 4:
+                    # DocAI bbox_norm: [x, y, w, h] in 0..1 relative to image
+                    img_w, img_h = page_image.width, page_image.height
                     bbox = BoundingBox(
-                        x=bbox_norm[0],
-                        y=bbox_norm[1],
-                        width=bbox_norm[2],
-                        height=bbox_norm[3],
+                        x=bbox_norm[0] * img_w,
+                        y=bbox_norm[1] * img_h,
+                        width=bbox_norm[2] * img_w,
+                        height=bbox_norm[3] * img_h,
                         page=page_num - 1  # 0-indexed
                     )
                 else:
@@ -848,9 +899,13 @@ class PDFOCRWorker(QRunnable):
 
                 block = Block(
                     text=block_data.get('text', ''),
-                    bbox=bbox,
                     confidence=block_data.get('conf', 1.0),
                     block_type=block_type,
+                    bbox=bbox,
+                    metadata={
+                        "bbox_norm": bbox_norm,
+                        "coord_type": "docai_normalized",
+                    },
                 )
                 blocks.append(block)
 
@@ -860,6 +915,37 @@ class PDFOCRWorker(QRunnable):
         )
 
         return blocks
+
+    def _create_thumbnail(self, image: Image.Image, size: int = 100) -> QPixmap:
+        """
+        Create thumbnail from PIL Image.
+
+        Args:
+            image: PIL Image
+            size: Thumbnail size
+
+        Returns:
+            QPixmap thumbnail
+        """
+        try:
+            # Create thumbnail
+            image.thumbnail((size, size))
+
+            # Convert to QPixmap
+            if image.mode == 'RGB':
+                data = image.tobytes("raw", "RGB")
+                qimage = QImage(data, image.width, image.height, QImage.Format_RGB888)
+            else:
+                # Convert to RGB first
+                rgb_image = image.convert('RGB')
+                data = rgb_image.tobytes("raw", "RGB")
+                qimage = QImage(data, rgb_image.width, rgb_image.height, QImage.Format_RGB888)
+
+            return QPixmap.fromImage(qimage)
+
+        except Exception as e:
+            logger.error(f"Failed to create thumbnail: {e}")
+            return QPixmap()
 
 
 class PageOCRWorker(QRunnable):

@@ -171,7 +171,11 @@ exe = EXE(
     upx=True,
     console=False,  # --windowed mode (no console)
     disable_windowed_traceback=False,
-    argv_emulation=True,  # macOS compatibility
+    # argv_emulation can cause the app script to be re-invoked
+    # multiple times on macOS (especially when associated with
+    # document types), which may manifest as multiple GUI windows
+    # being opened repeatedly. Disable it to ensure a single launch.
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,  # Set for codesigning
     entitlements_file=None,  # Set for hardened runtime
@@ -194,7 +198,7 @@ app = BUNDLE(
     coll,
     name='HybridPDFOCR.app',
     icon='resources/icon.icns' if (root_dir / 'resources/icon.icns').exists() else None,
-    bundle_identifier='com.hybridpdfocr.app',
+    bundle_identifier='com.hybridpdfocr.localdev',
     version='0.1.0',
     info_plist={
         'NSPrincipalClass': 'NSApplication',
@@ -227,5 +231,11 @@ app = BUNDLE(
         # File access
         'NSDocumentsFolderUsageDescription': 'This app needs access to your documents to process PDF files.',
         'NSDownloadsFolderUsageDescription': 'This app needs access to your downloads to process PDF files.',
+
+        # Prevent multiple instances of the .app from running
+        # simultaneously. Combined with the Python-level lock in
+        # src/gui/desktop_app.py this helps ensure only a single
+        # window / process is active at once.
+        'LSMultipleInstancesProhibited': True,
     },
 )
